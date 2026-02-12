@@ -16,13 +16,13 @@ class AdversarialAgent(TradingAgent):
     - Clearly labels each action as "pump phase" or "dump phase" in last_reason.
     """
 
-    PUMP_FRACTION = 0.25       # 25 % of cash in one burst
-    DUMP_THRESHOLD = 0.03      # dump after 3 % gain
-    VOLUME_LOW_PCTILE = 0.30   # consider "low volume" if current vol < 30th pctile
-    PUMP_PROBABILITY = 0.20    # 20 % chance to attempt pump in qualifying bar
-
-    def __init__(self, name: str, initial_cash: float = 100_000.0):
+    def __init__(self, name: str, initial_cash: float = 100_000.0, params: dict | None = None):
         super().__init__(name, initial_cash)
+        params = params or {}
+        self.PUMP_FRACTION = params.get("pump_fraction", 0.25)
+        self.DUMP_THRESHOLD = params.get("dump_threshold", 0.03)
+        self.VOLUME_LOW_PCTILE = params.get("volume_low_pctile", 0.30)
+        self.PUMP_PROBABILITY = params.get("pump_probability", 0.20)
         self._volume_history: list[float] = []
         self._phase = "idle"  # "idle" | "pumping" | "ready_to_dump"
 

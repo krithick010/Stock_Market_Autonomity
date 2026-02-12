@@ -2,10 +2,12 @@
 Flask API for the Multi-Agent Stock Market AI Autonomity simulation.
 
 Endpoints:
-    POST /api/init       – initialise simulation with ticker/period/interval
-    POST /api/step       – advance one simulation step
-    POST /api/auto-step  – advance N steps at once
-    GET  /api/state      – return current simulation snapshot
+    POST /api/init          – initialise simulation with ticker/period/interval/agents/params
+    POST /api/step          – advance one or N simulation steps
+    POST /api/auto-step     – advance N steps at once
+    POST /api/jump          – jump to a specific step
+    POST /api/trigger-crash – trigger a market crash event
+    GET  /api/state         – return current simulation snapshot
 """
 
 import sys
@@ -35,18 +37,26 @@ def init_simulation():
 
     Request body (JSON):
         {
-            "ticker":   "AAPL",   (default "AAPL")
-            "period":   "5d",      (default "5d")
-            "interval": "5m"       (default "5m")
+            "ticker":        "AAPL",
+            "period":        "5d",
+            "interval":      "5m",
+            "active_agents": ["conservative", "momentum", ...],  // optional
+            "agent_params":  { "conservative": { "risk_pct": 0.05 }, ... }  // optional
         }
     """
     data = request.get_json(force=True, silent=True) or {}
     ticker = data.get("ticker", "AAPL")
     period = data.get("period", "5d")
     interval = data.get("interval", "5m")
+    active_agents = data.get("active_agents", None)
+    agent_params = data.get("agent_params", None)
 
     try:
-        snapshot = simulation.init_simulation(ticker, period, interval)
+        snapshot = simulation.init_simulation(
+            ticker, period, interval,
+            active_agents=active_agents,
+            agent_params=agent_params,
+        )
         return jsonify(snapshot)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
@@ -59,9 +69,18 @@ def init_simulation():
 # ------------------------------------------------------------------ #
 @app.route("/api/step", methods=["POST"])
 def step_simulation():
-    """Advance simulation by one bar / step."""
+    """
+    Advance simulation by one or N steps.
+
+    Query params:
+        ?n=5   → batch-step 5 bars at once (default 1)
+    """
+    n = request.args.get("n", 1, type=int)
     try:
-        snapshot = simulation.step_simulation()
+        if n <= 1:
+            snapshot = simulation.step_simulation()
+        else:
+            snapshot = simulation.batch_step(n)
         if "error" in snapshot:
             return jsonify(snapshot), 400
         return jsonify(snapshot)
@@ -82,16 +101,52 @@ def auto_step_simulation():
     """
     data = request.get_json(force=True, silent=True) or {}
     n = data.get("steps", 10)
-    n = min(int(n), 100)  # cap at 100 to avoid long blocking calls
+    n = min(int(n), 200)
 
     try:
-        snapshot = None
-        for _ in range(n):
-            snapshot = simulation.step_simulation()
-            if snapshot.get("finished") or "error" in snapshot:
-                break
+        snapshot = simulation.batch_step(n)
         if snapshot is None:
             return jsonify({"error": "No steps executed."}), 400
+        return jsonify(snapshot)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ------------------------------------------------------------------ #
+# POST /api/jump
+# ------------------------------------------------------------------ #
+@app.route("/api/jump", methods=["POST"])
+def jump_to_step():
+    """
+    Jump (fast-forward or rewind) to a specific simulation step.
+
+    Request body (JSON):
+        { "step": 42 }
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    target = data.get("step", 0)
+    try:
+        snapshot = simulation.jump_to_step(int(target))
+        if "error" in snapshot:
+            return jsonify(snapshot), 400
+        return jsonify(snapshot)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ------------------------------------------------------------------ #
+# POST /api/trigger-crash
+# ------------------------------------------------------------------ #
+@app.route("/api/trigger-crash", methods=["POST"])
+def trigger_crash():
+    """
+    Trigger a market crash: 15-20% price drop, tripled volatility,
+    circuit breakers on vulnerable agents.
+    """
+    try:
+        snapshot = simulation.trigger_crash()
+        if "error" in snapshot:
+            return jsonify(snapshot), 400
         return jsonify(snapshot)
     except Exception as e:
         return jsonify({"error": str(e)}), 500

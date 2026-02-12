@@ -11,11 +11,14 @@ class NoiseTrader(TradingAgent):
     Strategy:
     - With a small probability each step, randomly BUY or SELL a small qty.
     - Adds realistic noise to the simulation.
-    - Position sizes are very small (1-3 % of cash).
+    - Position sizes are very small (configurable, default 2 % of cash).
     """
 
-    TRADE_PROBABILITY = 0.15   # 15 % chance of trading each step
-    POSITION_FRACTION = 0.02   # 2 % of cash
+    def __init__(self, name: str, initial_cash: float = 100_000.0, params: dict | None = None):
+        super().__init__(name, initial_cash)
+        params = params or {}
+        self.TRADE_PROBABILITY = params.get("trade_probability", 0.15)
+        self.POSITION_FRACTION = params.get("position_size_pct", 0.02)
 
     def decide(self) -> dict:
         state = self._state

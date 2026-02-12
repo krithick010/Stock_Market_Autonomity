@@ -1,5 +1,6 @@
 """
 Conservative Agent – low-risk, small positions, only trades in calm markets.
+Supports configurable risk_pct and stop_loss_pct via params dict.
 """
 
 from agents.base_agent import TradingAgent
@@ -11,14 +12,16 @@ class ConservativeAgent(TradingAgent):
     - Only trades when rolling volatility is below a threshold (calm market).
     - Buys when price is below SMA50 AND SMA20 > SMA50 (mild uptrend,
       price not overextended).
-    - Uses small position sizes (5-10 % of cash).
-    - Implements an internal stop-loss: sells if position drops more than
-      3 % below average cost.
+    - Uses small position sizes (configurable, default 7 % of cash).
+    - Implements an internal stop-loss (configurable, default 3 %).
     """
 
-    VOLATILITY_THRESHOLD = 0.02   # max acceptable rolling volatility
-    POSITION_FRACTION = 0.07      # 7 % of cash per trade
-    STOP_LOSS_PCT = 0.03          # 3 % stop loss
+    def __init__(self, name: str, initial_cash: float = 100_000.0, params: dict | None = None):
+        super().__init__(name, initial_cash)
+        params = params or {}
+        self.VOLATILITY_THRESHOLD = params.get("volatility_threshold", 0.02)
+        self.POSITION_FRACTION = params.get("risk_pct", 0.07)
+        self.STOP_LOSS_PCT = params.get("stop_loss_pct", 0.03)
 
     def decide(self) -> dict:
         state = self._state

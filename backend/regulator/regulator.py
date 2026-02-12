@@ -135,8 +135,13 @@ class RegulatorAgent:
                 decision = "WARN"
 
         reason_text = " | ".join(reasons) if reasons else "Trade compliant."
+
+        # Violation / warn count at this step
+        count_at_step = len(reasons)
+
         return {
             "decision": decision,
             "reason": reason_text,
             "adjusted_action": adjusted_action,
+            "count_at_step": count_at_step,
         }

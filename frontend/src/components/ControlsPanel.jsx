@@ -8,14 +8,21 @@ export default function ControlsPanel({
   ticker, setTicker,
   period, setPeriod,
   interval, setInterval_,
-  onInit, onStep, onAutoRun, onPause,
+  onInit, onStep, onAutoRun, onPause, onCrash,
   status, step, maxSteps,
+  speedMs, setSpeedMs,
+  batchSize, setBatchSize,
+  activeAgents, allAgents, toggleAgent,
+  onOpenSettings,
+  crashActive,
 }) {
   const badgeClass =
     status === 'running'  ? 'badge-running' :
     status === 'paused'   ? 'badge-paused' :
     status === 'finished' ? 'badge-finished' :
     'badge-idle';
+
+  const canAct = status === 'paused';
 
   return (
     <div className="card controls">
@@ -42,6 +49,41 @@ export default function ControlsPanel({
         </select>
       </label>
 
+      {/* Speed control */}
+      <div className="speed-section">
+        <label>
+          Speed: {speedMs}ms/step
+          <input
+            type="range" min={50} max={1000} step={50}
+            value={speedMs}
+            onChange={e => setSpeedMs(Number(e.target.value))}
+          />
+        </label>
+        <label>
+          Batch: {batchSize} step{batchSize > 1 ? 's' : ''}/tick
+          <input
+            type="range" min={1} max={20} step={1}
+            value={batchSize}
+            onChange={e => setBatchSize(Number(e.target.value))}
+          />
+        </label>
+      </div>
+
+      {/* Agent toggles */}
+      <div className="agent-toggles">
+        <h3>Active Agents</h3>
+        {allAgents.map(a => (
+          <label key={a.key} className="toggle-label">
+            <input
+              type="checkbox"
+              checked={activeAgents.includes(a.key)}
+              onChange={() => toggleAgent(a.key)}
+            />
+            {a.label}
+          </label>
+        ))}
+      </div>
+
       <div className="btn-row">
         <button className="btn btn-primary" onClick={onInit}>
           Start / Re-init
@@ -60,8 +102,28 @@ export default function ControlsPanel({
         </button>
       </div>
 
+      {/* Crash button */}
+      <button
+        className={`btn btn-crash ${crashActive ? 'crash-active' : ''}`}
+        onClick={onCrash}
+        disabled={status === 'idle' || status === 'finished'}
+        style={{ width: '100%', marginTop: 8 }}
+      >
+        💥 Trigger Crash
+      </button>
+
+      {/* Settings button */}
+      <button
+        className="btn btn-settings"
+        onClick={onOpenSettings}
+        style={{ width: '100%', marginTop: 8 }}
+      >
+        ⚙ Agent Settings
+      </button>
+
       <div className="status-text">
         Status: <span className={`badge ${badgeClass}`}>{status.toUpperCase()}</span>
+        {crashActive && <span className="badge badge-crash">CRASH</span>}
         <br />
         Step: {step} / {maxSteps}
       </div>

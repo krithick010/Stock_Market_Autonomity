@@ -11,11 +11,14 @@ class MomentumAgent(TradingAgent):
     - Uses SMA20 / SMA50 crossover to detect trend direction.
     - If SMA20 > SMA50 and not holding → BUY (trend is up).
     - If SMA20 < SMA50 and holding → SELL (trend reversing).
-    - Position size: ~15 % of cash.
+    - Position size: configurable (default 15 % of cash).
     - No short selling.
     """
 
-    POSITION_FRACTION = 0.15  # 15 % of cash
+    def __init__(self, name: str, initial_cash: float = 100_000.0, params: dict | None = None):
+        super().__init__(name, initial_cash)
+        params = params or {}
+        self.POSITION_FRACTION = params.get("position_size_pct", 0.15)
 
     def decide(self) -> dict:
         state = self._state
