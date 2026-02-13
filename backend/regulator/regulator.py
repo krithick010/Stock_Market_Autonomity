@@ -1,19 +1,33 @@
 """
 Regulator / Compliance module.
 Reviews every proposed trade for rule violations before execution.
+
+Regulator agent enforces rules:
+    MaxPositionLimit, BurstTrading, ManipulationPattern, etc.
+
+This is an **autonomous compliance agent** – it receives proposed trades
+from the Orchestrator, evaluates them against a rule set, and returns
+APPROVE / WARN / BLOCK decisions.  It is NOT a chatbot.
 """
 
 
 class RegulatorAgent:
     """
-    Enforces trading rules and compliance constraints.
+    Regulator agent enforces rules: MaxPositionLimit, BurstTrading,
+    ManipulationPattern, etc.
 
-    Rules:
-    1. Max position size: no agent may hold > 30 % of portfolio in one ticker.
-    2. Max order size: single order cannot exceed 10 % of recent average volume.
-    3. Manipulation detection:
-       - Large burst orders from adversarial agents in low-volume periods.
-       - Rapid-fire large orders in short succession.
+    **Goal**: Maintain market integrity by reviewing every proposed trade
+    and blocking or adjusting those that violate compliance rules.
+
+    **Rules enforced**:
+        1. **MaxPositionLimit** – no agent may hold > 30 % of portfolio
+           value in a single ticker.
+        2. **MaxOrderSize** – single order cannot exceed 10 % of recent
+           average volume.
+        3. **ManipulationPattern / BurstTrading** – detects rapid-fire
+           large orders (≥ 3 large orders in 5-step window) and blocks them.
+        4. **AdversarialFlag** – large orders from adversarial agents are
+           always flagged with a warning.
     """
 
     MAX_POSITION_PCT = 0.30        # max 30 % of portfolio value in one position

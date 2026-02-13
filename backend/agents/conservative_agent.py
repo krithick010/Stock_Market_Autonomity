@@ -1,6 +1,8 @@
 """
 Conservative Agent – low-risk, small positions, only trades in calm markets.
 Supports configurable risk_pct and stop_loss_pct via params dict.
+
+This agent is an **autonomous, goal-driven, rule-based decision maker**.
 """
 
 from agents.base_agent import TradingAgent
@@ -8,12 +10,23 @@ from agents.base_agent import TradingAgent
 
 class ConservativeAgent(TradingAgent):
     """
-    Strategy:
-    - Only trades when rolling volatility is below a threshold (calm market).
-    - Buys when price is below SMA50 AND SMA20 > SMA50 (mild uptrend,
-      price not overextended).
-    - Uses small position sizes (configurable, default 7 % of cash).
-    - Implements an internal stop-loss (configurable, default 3 %).
+    Autonomous Conservative Trading Agent.
+
+    **Goal**: Preserve capital and achieve small, steady returns by only
+    entering positions during low-volatility (calm) market conditions.
+
+    **Inputs**:
+        - Current price (Close)
+        - SMA20, SMA50 (trend indicators)
+        - Rolling Volatility (risk filter)
+        - Average cost basis (for stop-loss)
+
+    **Decision logic**:
+        1. If holding and price drops below stop-loss threshold → SELL all.
+        2. If volatility > threshold → HOLD (market too risky).
+        3. If price < SMA50 AND SMA20 > SMA50 (mild uptrend, not overextended)
+           → BUY a small position (default 7 % of cash).
+        4. Otherwise → HOLD.
     """
 
     def __init__(self, name: str, initial_cash: float = 100_000.0, params: dict | None = None):

@@ -1,6 +1,8 @@
 """
-In-memory simulation logger.
-Maintains trade logs and regulation logs for full audit trail.
+Simulation logger – dual-write to in-memory lists AND SQLite database.
+
+In-memory lists power the real-time UI; SQLite provides persistent storage
+for post-hoc analysis (satisfies DevHack 2026 "Database / Storage" requirement).
 """
 
 from datetime import datetime
@@ -8,16 +10,41 @@ from datetime import datetime
 
 class SimulationLogger:
     """
-    Captures every trade decision and regulatory event for post-hoc analysis.
-    All data is stored in-memory (no database for hackathon prototype).
+    Captures every trade decision and regulatory event.
+
+    Dual-write strategy:
+        1. In-memory lists  → served to the React frontend via REST API.
+        2. SQLite database   → persistent storage for post-hoc analysis.
+
+    The DB reference and run_id are injected via ``set_db()`` after
+    the OrchestratorAgent creates a new run.
     """
 
     def __init__(self):
         self.trade_log: list[dict] = []
         self.regulation_log: list[dict] = []
 
+        # Database reference (set after init via set_db)
+        self._db = None
+        self._run_id: str = ""
+        self._ticker: str = ""
+
+    def set_db(self, db, run_id: str, ticker: str):
+        """
+        Attach a SimulationDB instance so that every subsequent log call
+        also writes to SQLite.
+
+        Args:
+            db:      SimulationDB instance (or None to disable DB writes).
+            run_id:  UUID string for the current simulation run.
+            ticker:  Ticker symbol for the current run.
+        """
+        self._db = db
+        self._run_id = run_id
+        self._ticker = ticker
+
     def reset(self):
-        """Clear all logs."""
+        """Clear all in-memory logs (DB data is kept for history)."""
         self.trade_log.clear()
         self.regulation_log.clear()
 
@@ -40,16 +67,7 @@ class SimulationLogger:
         """
         Record a single trade decision (whether executed or blocked).
 
-        Args:
-            step:             simulation step index
-            agent_name:       name of the trading agent
-            action:           "BUY" / "SELL" / "HOLD"
-            price:            market price at time of trade
-            quantity:         number of shares
-            portfolio_value:  agent portfolio value after trade
-            reason:           agent's human-readable reasoning
-            decision:         regulator decision ("APPROVE"/"WARN"/"BLOCK")
-            decision_reason:  regulator's explanation
+        Writes to both in-memory list and SQLite trades table.
         """
         self.trade_log.append({
             "timestamp": datetime.now().isoformat(),
@@ -63,6 +81,21 @@ class SimulationLogger:
             "regulator_decision": decision,
             "regulator_reason": decision_reason,
         })
+
+        # ── SQLite dual-write ────────────────────────────────────────
+        if self._db and self._run_id:
+            self._db.insert_trade(
+                run_id=self._run_id,
+                step=step,
+                ticker=self._ticker,
+                agent=agent_name,
+                action=action,
+                price=price,
+                quantity=quantity,
+                portfolio_value=portfolio_value,
+                decision=decision,
+                decision_reason=decision_reason,
+            )
 
     # ------------------------------------------------------------------ #
     # Regulation event logging
@@ -79,12 +112,7 @@ class SimulationLogger:
         """
         Record a regulation event (warning or block).
 
-        Args:
-            step:        simulation step
-            agent_name:  agent involved
-            rule_name:   which compliance rule was triggered
-            decision:    "WARN" or "BLOCK"
-            explanation: detailed explanation of the violation
+        Writes to both in-memory list and SQLite regulation_events table.
         """
         self.regulation_log.append({
             "timestamp": datetime.now().isoformat(),
@@ -94,6 +122,17 @@ class SimulationLogger:
             "decision": decision,
             "explanation": explanation,
         })
+
+        # ── SQLite dual-write ────────────────────────────────────────
+        if self._db and self._run_id:
+            self._db.insert_regulation_event(
+                run_id=self._run_id,
+                step=step,
+                agent=agent_name,
+                rule=rule_name,
+                decision=decision,
+                explanation=explanation,
+            )
 
     # ------------------------------------------------------------------ #
     # Getters

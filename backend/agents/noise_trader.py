@@ -1,5 +1,8 @@
 """
 Noise Trader – random actions to inject realistic market noise.
+
+This agent is an **autonomous, goal-driven, rule-based decision maker**
+(goal: inject realistic irrational trading activity into the market).
 """
 
 import random
@@ -8,10 +11,23 @@ from agents.base_agent import TradingAgent
 
 class NoiseTrader(TradingAgent):
     """
-    Strategy:
-    - With a small probability each step, randomly BUY or SELL a small qty.
-    - Adds realistic noise to the simulation.
-    - Position sizes are very small (configurable, default 2 % of cash).
+    Autonomous Noise Trading Agent.
+
+    **Goal**: Simulate irrational / retail-style market activity by
+    placing small random trades, adding realistic noise to the
+    multi-agent simulation.
+
+    **Inputs**:
+        - Current price (Close)
+        - Internal random number generator
+        - Current position (for sell decisions)
+
+    **Decision logic**:
+        1. Each step, with probability ``trade_probability`` (default 15 %),
+           decide to trade; otherwise HOLD.
+        2. If trading: 50 % chance BUY a small random qty (up to 2 % of cash),
+           50 % chance SELL a random portion of holdings.
+        3. Provides a ``last_reason`` string explaining the random action.
     """
 
     def __init__(self, name: str, initial_cash: float = 100_000.0, params: dict | None = None):

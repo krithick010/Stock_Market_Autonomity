@@ -1,6 +1,19 @@
 """
 Flask API for the Multi-Agent Stock Market AI Autonomity simulation.
 
+DevHack 2026 Phase-1 architecture:
+
+    React Frontend  ──REST──►  Flask API (this file)
+                                    │
+                              Simulation (facade)
+                                    │
+                           OrchestratorAgent (Head Agent)
+                           ┌────────┼────────┐
+                           ▼        ▼        ▼
+                        Agents  Regulator  SQLite DB
+                       (5 autonomous       (persistent
+                        decision makers)    storage)
+
 Endpoints:
     POST /api/init          – initialise simulation with ticker/period/interval/agents/params
     POST /api/step          – advance one or N simulation steps

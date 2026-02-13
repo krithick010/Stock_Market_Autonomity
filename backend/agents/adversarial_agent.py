@@ -1,5 +1,8 @@
 """
 Adversarial Agent – simulates pump-and-dump manipulation.
+
+This agent is an **autonomous, goal-driven, rule-based decision maker**
+(goal: stress-test the Regulator by attempting manipulative trading).
 """
 
 import random
@@ -8,12 +11,27 @@ from agents.base_agent import TradingAgent
 
 class AdversarialAgent(TradingAgent):
     """
-    Strategy (pump-and-dump):
-    - In low-volume and low-volatility zones, accumulates a large position
-      (pump phase) by buying a burst of shares.
-    - Once position appreciates by a threshold %, dumps the entire position
-      (dump phase).
-    - Clearly labels each action as "pump phase" or "dump phase" in last_reason.
+    Autonomous Adversarial Trading Agent.
+
+    **Goal**: Simulate pump-and-dump market manipulation to stress-test
+    the Regulator agent's detection and enforcement capabilities.
+
+    **Inputs**:
+        - Current price (Close)
+        - Volume (to detect low-volume windows)
+        - Average cost basis (for dump-threshold check)
+        - Internal volume history (to compute percentile)
+
+    **Decision logic**:
+        1. **Dump phase**: if holding shares and unrealised gain >=
+           dump_threshold (default 3 %) → SELL entire position.
+        2. **Pump phase**: if current volume is in the lower quartile
+           of recent history AND random trigger fires → BUY large
+           position (default 25 % of cash).
+        3. Otherwise → HOLD (idle).
+
+    All actions are clearly labelled as "PUMP phase" or "DUMP phase"
+    in ``last_reason`` so the Regulator can flag them.
     """
 
     def __init__(self, name: str, initial_cash: float = 100_000.0, params: dict | None = None):

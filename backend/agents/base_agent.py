@@ -1,6 +1,11 @@
 """
 Base trading agent class.
-Every concrete agent inherits from TradingAgent and implements `decide()`.
+Every concrete agent inherits from TradingAgent and implements ``decide()``.
+
+All agents in this system are **autonomous, goal-driven, rule-based decision
+makers** – they observe market state, apply their strategy independently,
+and produce a BUY / SELL / HOLD action with a human-readable explanation.
+They are NOT chatbots or simple wrappers around an LLM.
 """
 
 import math
@@ -9,6 +14,10 @@ import math
 class TradingAgent:
     """
     Abstract base class for all autonomous trading agents.
+
+    Each subclass defines a distinct **goal** (e.g., "maximise trend profits",
+    "exploit mean-reversion") and implements the ``decide()`` method that
+    returns an action dict with a ``last_reason`` explanation.
 
     Attributes:
         name                   – human-readable agent name
@@ -170,6 +179,15 @@ class TradingAgent:
         """Serialise agent state for the frontend."""
         pv = self.get_portfolio_value(current_price, ticker)
         risk = self.get_risk_metrics(current_price, ticker)
+
+        # Determine agent status label (used by OrchestratorAgent snapshot)
+        if not self.active:
+            status = "DISABLED"
+        elif self.halted:
+            status = "HALTED"
+        else:
+            status = "ACTIVE"
+
         return {
             "name": self.name,
             "cash": round(self.cash, 2),
@@ -179,6 +197,7 @@ class TradingAgent:
             "last_reason": self.last_reason,
             "halted": self.halted,
             "active": self.active,
+            "status": status,
             "return_pct": risk["return_pct"],
             "max_drawdown_pct": risk["max_drawdown_pct"],
             "sharpe_ratio": risk["sharpe_ratio"],

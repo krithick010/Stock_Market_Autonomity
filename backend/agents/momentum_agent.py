@@ -1,5 +1,7 @@
 """
 Momentum Agent – trend-following strategy based on SMA crossovers.
+
+This agent is an **autonomous, goal-driven, rule-based decision maker**.
 """
 
 from agents.base_agent import TradingAgent
@@ -7,12 +9,21 @@ from agents.base_agent import TradingAgent
 
 class MomentumAgent(TradingAgent):
     """
-    Strategy:
-    - Uses SMA20 / SMA50 crossover to detect trend direction.
-    - If SMA20 > SMA50 and not holding → BUY (trend is up).
-    - If SMA20 < SMA50 and holding → SELL (trend reversing).
-    - Position size: configurable (default 15 % of cash).
-    - No short selling.
+    Autonomous Momentum Trading Agent.
+
+    **Goal**: Maximise profit by riding established price trends and
+    exiting when the trend reverses.
+
+    **Inputs**:
+        - SMA20, SMA50 (moving average crossover signals)
+        - Current price (Close)
+
+    **Decision logic**:
+        1. If SMA20 > SMA50 (golden cross / uptrend) and no position
+           → BUY (default 15 % of cash).
+        2. If SMA20 < SMA50 (death cross / downtrend) and holding
+           → SELL entire position.
+        3. Otherwise → HOLD.
     """
 
     def __init__(self, name: str, initial_cash: float = 100_000.0, params: dict | None = None):

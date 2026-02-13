@@ -1,5 +1,7 @@
 """
 Mean-Reversion Agent – buys at lower Bollinger Band, sells at upper.
+
+This agent is an **autonomous, goal-driven, rule-based decision maker**.
 """
 
 from agents.base_agent import TradingAgent
@@ -7,11 +9,22 @@ from agents.base_agent import TradingAgent
 
 class MeanReversionAgent(TradingAgent):
     """
-    Strategy:
-    - Uses Bollinger Bands (20-period, configurable band_multiplier std).
-    - If Close < BB_LOW → price oversold → BUY.
-    - If Close > BB_UP  → price overbought → SELL / close position.
-    - Medium position sizing (configurable, default 12 % of cash).
+    Autonomous Mean-Reversion Trading Agent.
+
+    **Goal**: Profit from the statistical tendency of prices to revert
+    to their moving average after extreme deviations.
+
+    **Inputs**:
+        - Current price (Close)
+        - Bollinger Band Mid (BB_MID = SMA20)
+        - Bollinger Band Upper (BB_UP) and Lower (BB_LOW)
+
+    **Decision logic**:
+        1. If price < BB_LOW → price is oversold → BUY (default 12 %
+           of cash).
+        2. If price > BB_UP and holding → price overbought → SELL
+           entire position.
+        3. Otherwise → HOLD (price is within normal bands).
     """
 
     def __init__(self, name: str, initial_cash: float = 100_000.0, params: dict | None = None):
