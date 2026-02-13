@@ -256,6 +256,11 @@ Class: OrchestratorAgent
     ticker, period,     – simulation parameters
     interval
     crash_active        – whether crash event is in effect
+    crash_mode_active   – whether whale-crash cascade is running
+    _crash_triggered_step – step at which crash was triggered
+    _pre_crash_price    – price just before crash, for drop tracking
+    trading_halted      – True when global circuit breaker has fired
+    GLOBAL_HALT_DRAWDOWN_PCT – threshold for global halt (−15 %)
     circuit_breakers_active – count of currently halted agents
     price_history       – list of all price bars seen so far
     trades_at_step      – trades executed in the latest step
@@ -269,18 +274,47 @@ Class: OrchestratorAgent
       3. Creates RegulatorAgent
       4. Generates UUID run_id, registers run in SQLite
       5. Attaches DB to logger for dual-write
-      6. Returns initial snapshot
+      6. Resets all crash / halt state
+      7. Returns initial snapshot
 
     run_step() → dict
       Core step logic (8-step flow):
+        Guard:  If trading_halted → force all agents to HOLD, advance bar,
+                return snapshot with "HALTED_BY_CIRCUIT_BREAKER" status
         Step 1: Get current market state (price, indicators)
         Step 2: Ask each active agent for an action (BUY/SELL/HOLD)
+                • On the crash-trigger step, the whale’s decide() is
+                  overridden with the forced full-dump SELL action
         Step 3: Send each action to Regulator for compliance review
         Step 4: Apply APPROVED/WARN actions to agent portfolios
         Step 5: Log trades + regulation events (memory + SQLite)
         Step 6: Compute rewards and call agent adaptation hooks
-        Step 7: Check circuit breakers (>10% drawdown → halt agent)
-        Step 8: Advance market to next bar
+        Step 7: Check per-agent circuit breakers (>10 % drawdown → halt)
+                + global circuit breaker (>−15 % system drawdown → halt all)
+        Step 8: Advance market to next bar (endogenous price impact)
+
+    _find_whale_agent() → TradingAgent | None
+      Returns the AdversarialAgent instance (the "whale")
+
+    _is_whale(agent) → bool
+      True if agent is an AdversarialAgent
+
+    _build_whale_dump(whale) → dict
+      Builds forced SELL action for 100 % of whale’s holdings
+
+    trigger_crash() → dict
+      Public entry point – delegates to trigger_market_crash()
+
+    trigger_market_crash() → dict
+      Whale Manipulation / Cascade Crash demo scenario:
+        1. Ensures whale has a position (buys 90 % of cash if empty)
+        2. Drops OHLC prices by 15-20 % from current step onward
+        3. Recomputes all technical indicators
+        4. Records pre-crash price, activates crash_mode_active
+        5. Runs one step where whale’s action is overridden to full dump
+        6. Large negative net_volume flows through endogenous price model
+        Result: subsequent ticks show momentum agents stop-lossing,
+        and eventually the global circuit breaker fires.
 
     _build_agent_state(agent, close) → dict
       Helper: builds {cash, positions, portfolio_value} for regulator
@@ -291,12 +325,6 @@ Class: OrchestratorAgent
     jump_to_step(target_step) → dict
       Rewinds (re-init + replay) or fast-forwards to target step
 
-    trigger_crash() → dict
-      1. Drops OHLC prices by 15-20% from current step onward
-      2. Triples volatility for 10 steps
-      3. Recomputes all technical indicators
-      4. Activates circuit breakers on agents with >10% drawdown
-
     get_system_risk() → dict
       Returns: total_exposure, total_aum, exposure_pct,
                open_positions_count, active_agents, violation_count,
@@ -305,14 +333,17 @@ Class: OrchestratorAgent
     get_snapshot() → dict
       Full JSON snapshot including:
         - head_agent: {name, role, current_step, max_steps, crash_active,
+                       crash_mode_active, trading_halted,
                        circuit_breakers_active, run_id}
         - step, max_steps, ticker, period, interval, finished
         - current_bar, price_history
         - agents: [{name, cash, positions, portfolio_value, last_action,
-                    last_reason, halted, active, status, return_pct,
-                    max_drawdown_pct, sharpe_ratio}, ...]
+                    last_reasoning, last_reason, goal, halted, active,
+                    status, return_pct, max_drawdown_pct, sharpe_ratio}, ...]
         - trade_log, regulation_log, trades_at_step
-        - system_risk, crash_active, circuit_breakers_active
+        - system_risk, crash_active, crash_mode_active
+        - trading_halted, trading_status ("ACTIVE" / "HALTED_BY_CIRCUIT_BREAKER")
+        - circuit_breakers_active
 
 
 ────────────────────────────────────────────────────────────────────────────────
@@ -338,10 +369,13 @@ Class: MarketEnvironment
         Volatility – 20-period rolling std of log returns
 
   get_state() → dict
-    Returns: {current_bar, recent_window (last 50 bars), step, total_bars}
+    Returns: {current_bar, recent_window (last 50 bars), step, total_bars,
+              simulated_price, price_history_simulated}
 
-  step(actions_by_agent) → (new_state, rewards, info)
-    Advances market by 1 bar. Returns finished flag.
+  step(net_volume) → dict
+    Advances market by 1 bar with endogenous price impact.
+    Net agent order flow adjusts simulated price.
+    Returns dict with "finished" key.
 
   is_done() → bool
     True when at last bar.
@@ -357,19 +391,47 @@ Class: TradingAgent
 
   Attributes:
     name, cash, initial_cash, positions (dict), avg_cost (dict),
-    portfolio_value_history (list), last_action, last_reason,
+    portfolio_value_history (list),
+    last_action (str)       – "BUY" / "SELL" / "HOLD"
+    last_reasoning (str)    – human-readable explanation of last decision
+    last_reason (str)       – backward-compat alias for last_reasoning
+    goal (str)              – strategic objective (set by subclasses)
     _state, halted, active, _peak_value
 
   Methods:
     __init__(name, initial_cash=100_000)
     observe_market_state(state)       – store market state for decide()
-    decide() → dict                   – ABSTRACT: returns {type, ticker, quantity}
+
+    decide() → dict                   – returns structured decision:
+                                        {"action": "BUY"|"SELL"|"HOLD",
+                                         "quantity": int,
+                                         "reasoning": str}
+                                        Default impl returns HOLD with
+                                        "Base agent does not implement
+                                         a strategy." reasoning.
+                                        Sets self.last_action and
+                                        self.last_reasoning after each call.
+
+    build_reasoning(**kwargs) → str    – utility to build concise reasoning
+                                        strings from key indicators, e.g.
+                                        build_reasoning(RSI=25,
+                                          price_vs_BB="below BB_LOW")
+                                        → "RSI=25, price_vs_BB=below BB_LOW"
+
     update_after_step(reward, state)  – adaptation hook (no-op default)
     get_portfolio_value(price, ticker) – cash + holdings value
-    execute_action(action, price)     – apply BUY/SELL to cash/positions
+
+    execute_action(action, price)     – apply BUY/SELL to cash/positions;
+                                        supports both "action" and legacy
+                                        "type" keys; updates last_action,
+                                        last_reasoning, last_reason
+
     get_risk_metrics(price, ticker)   – return_pct, max_drawdown_pct,
                                         sharpe_ratio, current_drawdown_pct
-    to_dict(price, ticker)            – serialize for frontend (includes status)
+
+    to_dict(price, ticker)            – serialize for frontend; includes
+                                        last_action, last_reasoning,
+                                        last_reason, goal, status
 
 
 ────────────────────────────────────────────────────────────────────────────────
@@ -486,11 +548,14 @@ Class: RegulatorAgent
     MAX_ORDER_VOLUME_PCT   = 0.10   (max 10% of avg volume per trade)
     BURST_WINDOW           = 5      (look-back steps for burst detection)
     BURST_THRESHOLD        = 3      (max large orders before BLOCK)
+    CRASH_DROP_PCT         = −0.05  (>5% price drop = crash condition)
+    CRASH_LOOKBACK         = 10     (bars averaged for crash baseline)
 
   Internal State:
     _recent_orders – per-agent list of steps with large orders
 
   Method: review_trade(agent_name, action, agent_state, market_state, step)
+    Accepts both new ("action"/"reasoning") and legacy ("type") key names.
     Returns: {decision, reason, adjusted_action, count_at_step}
 
     Rules Enforced:
@@ -498,8 +563,18 @@ Class: RegulatorAgent
       2. MaxOrderSize       – order > 10% of volume → WARN + reduce qty
       3. ManipulationPattern / BurstTrading – ≥3 large orders in 5 steps → BLOCK
       4. AdversarialFlag    – large orders from adversarial agents → WARN
+      5. ContrarianCrashDetection – agent tries to BUY while market is
+         crashing (simulated price >5% below recent average) → WARN
+         with message: "Market is down −X.X%, agent chose BUY.
+         Risky contrarian behaviour: {agent’s reasoning}"
 
     HOLD actions always get APPROVE.
+
+  Helper: _compute_crash_drop(market_state) → float
+    Computes percentage drop between current simulated price and the
+    average of the last CRASH_LOOKBACK simulated prices.  Returns a
+    negative float (e.g. −0.07 for 7% drop).  Returns 0.0 if
+    insufficient history.
 
 
 ────────────────────────────────────────────────────────────────────────────────
@@ -871,53 +946,67 @@ Class: SimulationDB
   Core Simulation:
     [1]  Real market data via yfinance (any ticker, period, interval)
     [2]  5 autonomous trading agents with distinct strategies
-    [3]  Regulator / compliance agent reviewing every trade
+    [3]  Regulator / compliance agent reviewing every trade (5 rules)
     [4]  OrchestratorAgent (Head Agent) coordinating entire system
     [5]  Step-by-step simulation with full state tracking
+    [6]  Endogenous price impact model (agent order flow moves price)
 
   Agent Features:
-    [6]  Per-agent configurable parameters (via Settings Modal)
-    [7]  Agent enable/disable toggles (runtime)
-    [8]  Individual portfolio tracking ($100K initial per agent)
-    [9]  Per-agent risk metrics (return %, drawdown, Sharpe ratio)
-    [10] Human-readable decision explanations (last_reason)
-    [11] Circuit breakers (auto-halt at >10% drawdown)
+    [7]  Structured decision dicts: {action, quantity, reasoning}
+    [8]  Per-agent goal attribute (strategic objective)
+    [9]  build_reasoning() helper for concise indicator summaries
+    [10] Per-agent configurable parameters (via Settings Modal)
+    [11] Agent enable/disable toggles (runtime)
+    [12] Individual portfolio tracking ($100K initial per agent)
+    [13] Per-agent risk metrics (return %, drawdown, Sharpe ratio)
+    [14] Human-readable reasoning strings for every decision
+    [15] Per-agent circuit breakers (auto-halt at >10% drawdown)
 
   Market Features:
-    [12] Technical indicators: SMA20, SMA50, Bollinger Bands, Volatility
-    [13] Candlestick chart toggle (line ↔ candlestick)
-    [14] Trade markers on chart (▲ BUY / ▼ SELL overlays)
-    [15] Crash button (15-20% price drop, 3x volatility, circuit breakers)
-    [16] Step scrubber / jump to any step
+    [16] Technical indicators: SMA20, SMA50, Bollinger Bands, Volatility
+    [17] Candlestick chart toggle (line ↔ candlestick)
+    [18] Trade markers on chart (▲ BUY / ▼ SELL overlays)
+    [19] Step scrubber / jump to any step
+
+  Whale Manipulation / Cascade Crash:
+    [20] Trigger Crash button → whale dumps 100% of holdings
+    [21] 15-20% OHLC price drop + indicator recalculation
+    [22] Endogenous price impact amplifies the crash
+    [23] Momentum / other agents react naturally (stop-loss, trend reversal)
+    [24] Global circuit breaker halts ALL trading at −15% system drawdown
+    [25] trading_status: "HALTED_BY_CIRCUIT_BREAKER" exposed to frontend
 
   Risk & Compliance:
-    [17] System-wide risk dashboard (AUM, exposure, drawdown, violations)
-    [18] Risk level assessment (LOW / MEDIUM / HIGH)
-    [19] Violation heatmap (per-agent violation bar chart)
-    [20] 4 compliance rules (MaxPosition, MaxOrder, BurstTrading, Adversarial)
+    [26] System-wide risk dashboard (AUM, exposure, drawdown, violations)
+    [27] Risk level assessment (LOW / MEDIUM / HIGH)
+    [28] Violation heatmap (per-agent violation bar chart)
+    [29] 5 compliance rules:
+           MaxPositionLimit, MaxOrderSize, BurstTrading,
+           AdversarialFlag, ContrarianCrashDetection
+    [30] Regulator reads agent reasoning to flag contrarian crash trades
 
   UI / UX:
-    [21] Auto-run with configurable speed slider (50ms – 1000ms)
-    [22] Batch step size control (1 – 20 steps per tick)
-    [23] Dark theme with responsive layout
-    [24] Filterable trade log table (by agent)
-    [25] Regulation event log table
-    [26] Portfolio performance line chart (per agent)
-    [27] Crash flash animation (red pulse effect)
-    [28] Status badges (idle / running / paused / finished / halted)
+    [31] Auto-run with configurable speed slider (50ms – 1000ms)
+    [32] Batch step size control (1 – 20 steps per tick)
+    [33] Dark theme with responsive layout
+    [34] Filterable trade log table (by agent)
+    [35] Regulation event log table
+    [36] Portfolio performance line chart (per agent)
+    [37] Crash flash animation (red pulse effect)
+    [38] Status badges (idle / running / paused / finished / halted)
 
   Data & Storage:
-    [29] SQLite persistent database (devhack.db)
-    [30] Dual-write logging (in-memory + SQLite)
-    [31] Per-run UUID tracking
-    [32] Full audit trail (every trade + regulation event stored)
+    [39] SQLite persistent database (devhack.db)
+    [40] Dual-write logging (in-memory + SQLite)
+    [41] Per-run UUID tracking
+    [42] Full audit trail (every trade + regulation event stored)
 
   Architecture:
-    [33] Head Agent / Orchestrator pattern
-    [34] Facade pattern (Simulation wraps Orchestrator)
-    [35] Clean agent abstraction (base class + 5 implementations)
-    [36] REST API with 6 endpoints
-    [37] Proxy-based dev setup (Vite → Flask)
+    [43] Head Agent / Orchestrator pattern
+    [44] Facade pattern (Simulation wraps Orchestrator)
+    [45] Clean agent abstraction (base class + 5 implementations)
+    [46] REST API with 6 endpoints
+    [47] Proxy-based dev setup (Vite → Flask)
 
 
 ================================================================================
@@ -993,6 +1082,12 @@ Class: SimulationDB
   For each simulation step, the Orchestrator executes:
 
     ┌────────────────────────────┐
+    │  GUARD: trading_halted?   │  ← If True → force all HOLD, advance bar,
+    │  (global circuit breaker) │    return "HALTED_BY_CIRCUIT_BREAKER"
+    └────────────┬───────────────┘
+                 │ not halted
+                 ▼
+    ┌────────────────────────────┐
     │  1. Market.get_state()     │  ← Get current bar (OHLCV + indicators)
     └────────────┬───────────────┘
                  │
@@ -1000,15 +1095,18 @@ Class: SimulationDB
     ┌────────────────────────────┐
     │  2. For each active agent: │
     │     agent.observe(state)   │  ← Agent receives market data
-    │     action = agent.decide()│  ← Agent applies strategy autonomously
+    │     action = agent.decide()│  ← Returns {action, quantity, reasoning}
+    │                            │    • On crash-trigger step: whale’s
+    │                            │      decide() overridden with forced
+    │                            │      full-dump SELL action
     └────────────┬───────────────┘
                  │
                  ▼
     ┌────────────────────────────┐
     │  3. Regulator.review(      │
-    │       agent, action,       │  ← Compliance check
-    │       agent_state,         │  ← Returns APPROVE / WARN / BLOCK
-    │       market_state)        │  ← May adjust quantity
+    │       agent, action,       │  ← 5 compliance rules checked
+    │       agent_state,         │  ← Reads action["reasoning"]
+    │       market_state)        │  ← Returns APPROVE / WARN / BLOCK
     └────────────┬───────────────┘
                  │
                  ▼
@@ -1031,13 +1129,53 @@ Class: SimulationDB
                  │
                  ▼
     ┌────────────────────────────┐
-    │  7. Check circuit breakers │  ← Halt agents with >10% drawdown
+    │  7a. Per-agent circuit      │  ← Halt agents with >10% drawdown
+    │      breakers               │
+    │  7b. Global circuit breaker │  ← If system drawdown ≤ −15%:
+    │      (trading_halted)       │    ALL TRADING HALTED
     └────────────┬───────────────┘
                  │
                  ▼
     ┌────────────────────────────┐
-    │  8. Market.step()          │  ← Advance to next bar
+    │  8. Market.step(net_volume) │  ← Advance bar + endogenous price impact
     └────────────────────────────┘
+
+
+  Whale Manipulation / Cascade Crash Flow:
+
+    ┌────────────────────────────────────────────────┐
+    │  User clicks "Trigger Crash" button             │
+    └────────────────────────┬───────────────────────┘
+                                 │
+                                 ▼
+    ┌────────────────────────────────────────────────┐
+    │  Orchestrator.trigger_market_crash()             │
+    │  1. Ensure whale has position (buy 90% if empty) │
+    │  2. Drop OHLC 15-20%, recompute indicators       │
+    │  3. Mark crash_mode_active = True                 │
+    │  4. Run one step with whale’s decide() overridden │
+    └────────────────────────┬───────────────────────┘
+                                 │
+                                 ▼
+    ┌────────────────────────────────────────────────┐
+    │  Whale forced SELL → big negative net_volume      │
+    │  → Endogenous price model pushes price further    │
+    └────────────────────────┬───────────────────────┘
+                                 │
+                                 ▼
+    ┌────────────────────────────────────────────────┐
+    │  Subsequent ticks:                                │
+    │  • Momentum sees downtrend → stop-loss SELL       │
+    │  • Conservative hits stop-loss → SELL              │
+    │  • Regulator flags contrarian BUYs as risky        │
+    └────────────────────────┬───────────────────────┘
+                                 │
+                                 ▼
+    ┌────────────────────────────────────────────────┐
+    │  Global drawdown ≤ −15% → trading_halted = True    │
+    │  → "HALTED_BY_CIRCUIT_BREAKER" status              │
+    │  → All further steps force HOLD for every agent    │
+    └────────────────────────────────────────────────┘
 
 
 ================================================================================
@@ -1053,7 +1191,8 @@ Class: SimulationDB
   ├─────────────────────────────────┼────────────────────────────────────────┤
   │ 1 Head Agent (Orchestrator)     │ OrchestratorAgent class in             │
   │                                 │ simulation/orchestrator.py             │
-  │                                 │ Owns clock, coordinates all agents     │
+  │                                 │ Owns clock, coordinates all agents,    │
+  │                                 │ triggers whale crash + global halt     │
   ├─────────────────────────────────┼────────────────────────────────────────┤
   │ Must have a backend             │ Flask REST API (6 endpoints)           │
   │                                 │ Python backend with full business logic│
@@ -1064,17 +1203,22 @@ Class: SimulationDB
   ├─────────────────────────────────┼────────────────────────────────────────┤
   │ Clear agent roles               │ Each agent has Goal / Inputs /         │
   │                                 │ Decision Logic documented in docstring │
-  │                                 │ Explicit last_reason for every action  │
+  │                                 │ Structured {action, qty, reasoning}    │
+  │                                 │ dict for every decision                │
   ├─────────────────────────────────┼────────────────────────────────────────┤
-  │ Agent interaction flow          │ 8-step flow in OrchestratorAgent       │
+  │ Agent interaction flow          │ 8-step flow + global halt guard in     │
+  │                                 │ OrchestratorAgent.run_step()           │
   │                                 │ Market → Agent → Regulator → Execute   │
+  │                                 │ + whale crash cascade flow             │
   ├─────────────────────────────────┼────────────────────────────────────────┤
   │ Autonomous, goal-driven system  │ All agents are autonomous rule-based   │
   │                                 │ decision makers (NOT chatbots)         │
-  │                                 │ Each has distinct strategy and goal    │
+  │                                 │ Each has distinct strategy, goal, and  │
+  │                                 │ produces structured reasoning          │
   ├─────────────────────────────────┼────────────────────────────────────────┤
-  │ Flowcharts / architecture       │ ASCII diagrams in code comments        │
-  │                                 │ Interaction flow documented            │
+  │ Flowcharts / architecture       │ ASCII diagrams in code + report        │
+  │                                 │ Interaction flow + whale crash flow    │
+  │                                 │ documented with full diagrams          │
   └─────────────────────────────────┴────────────────────────────────────────┘
 
 

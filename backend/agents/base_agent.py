@@ -4,7 +4,7 @@ Every concrete agent inherits from TradingAgent and implements ``decide()``.
 
 All agents in this system are **autonomous, goal-driven, rule-based decision
 makers** – they observe market state, apply their strategy independently,
-and produce a BUY / SELL / HOLD action with a human-readable explanation.
+and produce a structured decision dict with a human-readable reasoning string.
 They are NOT chatbots or simple wrappers around an LLM.
 """
 
@@ -17,7 +17,7 @@ class TradingAgent:
 
     Each subclass defines a distinct **goal** (e.g., "maximise trend profits",
     "exploit mean-reversion") and implements the ``decide()`` method that
-    returns an action dict with a ``last_reason`` explanation.
+    returns a structured decision dict.
 
     Attributes:
         name                   – human-readable agent name
@@ -25,8 +25,10 @@ class TradingAgent:
         positions              – dict {ticker: quantity}
         avg_cost               – dict {ticker: average_cost_basis}
         portfolio_value_history – list of portfolio values over time
-        last_action            – last action dict or None
-        last_reason            – human-readable explanation of last decision
+        last_action            – string label of last action ("BUY"/"SELL"/"HOLD")
+        last_reasoning         – human-readable explanation of last decision
+        last_reason            – alias kept for backward compatibility
+        goal                   – strategic objective (set by subclasses)
         halted                 – True when circuit breaker has halted this agent
         active                 – whether agent participates in simulation steps
     """
@@ -38,8 +40,10 @@ class TradingAgent:
         self.positions: dict[str, int] = {}
         self.avg_cost: dict[str, float] = {}
         self.portfolio_value_history: list[float] = []
-        self.last_action: dict | None = None
-        self.last_reason: str = ""
+        self.last_action: str = ""
+        self.last_reasoning: str = ""
+        self.last_reason: str = ""            # backward-compat alias
+        self.goal: str = ""                   # set by subclasses
         self._state: dict | None = None
         self.halted: bool = False
         self.active: bool = True
@@ -57,13 +61,51 @@ class TradingAgent:
         """
         Decide on a trading action.
 
-        Returns:
-            dict with keys:
-                type     – "BUY" | "SELL" | "HOLD"
-                ticker   – str
-                quantity – int  (>= 0)
+        Subclasses **must** override this method and return a structured
+        decision dict of the form::
+
+            {
+                "action":    "BUY" | "SELL" | "HOLD",
+                "quantity":  int   (>= 0),
+                "reasoning": str   (human-readable explanation),
+            }
+
+        The dict may also carry extra keys needed by the simulation
+        (e.g. ``ticker``), but the three above are mandatory.
+
+        After computing the decision, implementations should set:
+            * ``self.last_action``    – the action string
+            * ``self.last_reasoning`` – the reasoning string
         """
-        raise NotImplementedError("Subclasses must implement decide()")
+        # Default: do nothing and explain why
+        self.last_action = "HOLD"
+        self.last_reasoning = "Base agent does not implement a strategy."
+        self.last_reason = self.last_reasoning
+        return {
+            "action": "HOLD",
+            "quantity": 0,
+            "reasoning": self.last_reasoning,
+        }
+
+    # ------------------------------------------------------------------ #
+    # Reasoning helper
+    # ------------------------------------------------------------------ #
+
+    def build_reasoning(self, **kwargs) -> str:
+        """
+        Utility to build a concise, human-readable reasoning string
+        from key indicators.
+
+        Example::
+
+            self.build_reasoning(RSI=25, price_vs_BB="below BB_LOW",
+                                 expectation="mean reversion")
+            # → "RSI=25, price_vs_BB=below BB_LOW, expectation=mean reversion"
+        """
+        if not kwargs:
+            return "No additional indicators."
+        parts = [f"{k}={v}" for k, v in kwargs.items()]
+        return ", ".join(parts)
 
     def update_after_step(self, reward: float, new_state: dict):
         """Hook called after each simulation step (for adaptation logic)."""
@@ -91,7 +133,8 @@ class TradingAgent:
         Actually apply a trade to cash / positions.
         Assumes the action has already been reviewed by the regulator.
         """
-        action_type = action.get("type", "HOLD")
+        # Support both old ("type") and new ("action") key names
+        action_type = action.get("action") or action.get("type", "HOLD")
         ticker = action.get("ticker", "")
         quantity = action.get("quantity", 0)
 
@@ -119,7 +162,13 @@ class TradingAgent:
                     self.positions.pop(ticker, None)
                     self.avg_cost.pop(ticker, None)
 
-        self.last_action = action
+        # Keep structured dict on the instance for backward compat,
+        # but also update the canonical string attributes.
+        self.last_action = action_type
+        reasoning = action.get("reasoning", "")
+        if reasoning:
+            self.last_reasoning = reasoning
+            self.last_reason = reasoning
 
     # ------------------------------------------------------------------ #
     # Risk metrics
@@ -194,7 +243,9 @@ class TradingAgent:
             "positions": dict(self.positions),
             "portfolio_value": round(pv, 2),
             "last_action": self.last_action,
+            "last_reasoning": self.last_reasoning,
             "last_reason": self.last_reason,
+            "goal": self.goal,
             "halted": self.halted,
             "active": self.active,
             "status": status,

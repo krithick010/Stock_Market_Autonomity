@@ -34,6 +34,8 @@ class RegulatorAgent:
     MAX_ORDER_VOLUME_PCT = 0.10    # max 10 % of recent avg volume per trade
     BURST_WINDOW = 5               # look-back window (steps) for burst detection
     BURST_THRESHOLD = 3            # max large orders in window
+    CRASH_DROP_PCT = -0.05         # >5 % drop from recent avg → crash condition
+    CRASH_LOOKBACK = 10            # number of bars to average for crash baseline
 
     def __init__(self):
         # Track recent large orders per agent for burst detection
@@ -52,9 +54,12 @@ class RegulatorAgent:
 
         Args:
             agent_name:   name of the agent proposing the trade
-            action:       {"type": "BUY"/"SELL"/"HOLD", "ticker": str, "quantity": int}
+            action:       {"action": "BUY"/"SELL"/"HOLD", "quantity": int,
+                           "reasoning": str, ...}
+                          (legacy key "type" is also accepted)
             agent_state:  {"cash": float, "positions": dict, "portfolio_value": float}
-            market_state: current_bar dict (Close, Volume, Volatility, …)
+            market_state: current_bar dict (Close, Volume, Volatility,
+                          simulated_price, price_history_simulated, …)
             current_step: current simulation step
 
         Returns:
@@ -64,9 +69,11 @@ class RegulatorAgent:
                 "adjusted_action": dict   (same as action, or modified)
             }
         """
-        action_type = action.get("type", "HOLD")
+        # Support both new ("action") and legacy ("type") key names
+        action_type = action.get("action") or action.get("type", "HOLD")
         quantity = action.get("quantity", 0)
         ticker = action.get("ticker", "")
+        agent_reasoning = action.get("reasoning", "")
 
         # HOLD always approved
         if action_type == "HOLD" or quantity == 0:
@@ -148,6 +155,17 @@ class RegulatorAgent:
             if decision == "APPROVE":
                 decision = "WARN"
 
+        # ---- Rule 5: Contrarian trade during market crash ----
+        if action_type == "BUY" and decision != "BLOCK":
+            price_drop_pct = self._compute_crash_drop(market_state)
+            if price_drop_pct < self.CRASH_DROP_PCT:
+                reasons.append(
+                    f"Market is down {price_drop_pct:.1%}, agent chose BUY. "
+                    f"Risky contrarian behaviour: {agent_reasoning}"
+                )
+                if decision == "APPROVE":
+                    decision = "WARN"
+
         reason_text = " | ".join(reasons) if reasons else "Trade compliant."
 
         # Violation / warn count at this step
@@ -159,3 +177,31 @@ class RegulatorAgent:
             "adjusted_action": adjusted_action,
             "count_at_step": count_at_step,
         }
+
+    # ------------------------------------------------------------------ #
+    # Internal helpers
+    # ------------------------------------------------------------------ #
+
+    def _compute_crash_drop(self, market_state: dict) -> float:
+        """
+        Compute the percentage change between the current simulated price
+        and the average of the last ``CRASH_LOOKBACK`` simulated prices.
+
+        Returns a negative float when the market is falling (e.g. -0.07
+        for a 7 % drop).  Returns 0.0 if insufficient history is available.
+        """
+        current_price = market_state.get("simulated_price", 0)
+        history = market_state.get("price_history_simulated", [])
+
+        if not history or current_price <= 0:
+            return 0.0
+
+        lookback = history[-self.CRASH_LOOKBACK:]   # last N prices
+        if len(lookback) < 2:
+            return 0.0
+
+        avg_recent = sum(lookback) / len(lookback)
+        if avg_recent <= 0:
+            return 0.0
+
+        return (current_price - avg_recent) / avg_recent

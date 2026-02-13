@@ -131,6 +131,13 @@ class OrchestratorAgent:
         self._crash_vol_multiplier: float = 1.0
         self.circuit_breakers_active: int = 0
 
+        # Whale-crash / cascade state
+        self.crash_mode_active: bool = False
+        self._crash_triggered_step: int | None = None
+        self._pre_crash_price: float | None = None
+        self.trading_halted: bool = False
+        self.GLOBAL_HALT_DRAWDOWN_PCT = -15.0    # halt all trading at -15 %
+
         # Config received at init (kept for re-init / jump)
         self._active_agent_keys: list[str] = []
         self._agent_params: dict = {}
@@ -169,6 +176,10 @@ class OrchestratorAgent:
         self._crash_steps_remaining = 0
         self._crash_vol_multiplier = 1.0
         self.circuit_breakers_active = 0
+        self.crash_mode_active = False
+        self._crash_triggered_step = None
+        self._pre_crash_price = None
+        self.trading_halted = False
 
         # Reset in-memory logs
         self.logger.reset()
@@ -247,13 +258,48 @@ class OrchestratorAgent:
             self.finished = True
             return self.get_snapshot()
 
+        # ── Global trading halt guard ─────────────────────────────────
+        if self.trading_halted:
+            # Market is frozen – nobody trades.  Still advance the bar so
+            # the chart keeps moving and the user can see the halt.
+            state = self.market.get_state()
+            close = state["current_bar"]["Close"]
+            self.trades_at_step = []
+            for agent in self.agents:
+                if not agent.active:
+                    continue
+                pv = agent.get_portfolio_value(close, self.ticker)
+                agent.portfolio_value_history.append(pv)
+                agent.last_reason = "Trading halted by circuit breaker"
+                agent.last_reasoning = agent.last_reason
+                self.logger.log_trade(
+                    step=self.current_step,
+                    agent_name=agent.name,
+                    action="HOLD",
+                    price=close,
+                    quantity=0,
+                    portfolio_value=pv,
+                    reason="Trading halted by circuit breaker",
+                    decision="BLOCK",
+                    decision_reason="GLOBAL_HALT: circuit breaker active",
+                )
+            step_result = self.market.step(0.0)
+            self.current_step = self.market.current_step
+            market_state = self.market.get_state()
+            self.price_history.append(market_state["current_bar"])
+            if step_result.get("finished"):
+                self.finished = True
+            return self.get_snapshot()
+
         # ── Step 1: Get current market state ──────────────────────────
         state = self.market.get_state()
         bar = state["current_bar"]
         close = bar["Close"]
 
-        # Inject ticker into bar so agents can reference it
+        # Inject ticker + simulated price data into bar for regulator
         bar["ticker"] = self.ticker
+        bar["simulated_price"] = state.get("simulated_price", bar.get("Close", 0))
+        bar["price_history_simulated"] = state.get("price_history_simulated", [])
 
         # Handle crash volatility decay
         if self._crash_steps_remaining > 0:
@@ -264,6 +310,9 @@ class OrchestratorAgent:
 
         self.trades_at_step = []
 
+        # Track net order flow for endogenous price impact model
+        net_volume: float = 0.0
+
         for agent in self.agents:
             # Skip inactive agents
             if not agent.active:
@@ -273,6 +322,7 @@ class OrchestratorAgent:
             # Skip halted agents (circuit breaker)
             if agent.halted:
                 agent.last_reason = "HALTED by circuit breaker"
+                agent.last_reasoning = agent.last_reason
                 pv = agent.get_portfolio_value(close, self.ticker)
                 agent.portfolio_value_history.append(pv)
                 self.logger.log_trade(
@@ -291,7 +341,18 @@ class OrchestratorAgent:
             # ── Step 2: Ask agent for an action ───────────────────────
             # Each agent is an autonomous, goal-driven, rule-based decision maker.
             agent.observe_market_state(state)
-            action = agent.decide()
+
+            # If this is the whale agent on the crash-trigger step,
+            # override its decision with the forced dump.
+            if (
+                self.crash_mode_active
+                and self._crash_triggered_step == self.current_step
+                and self._is_whale(agent)
+            ):
+                action = self._build_whale_dump(agent)
+            else:
+                action = agent.decide()
+
             action.setdefault("ticker", self.ticker)
 
             # ── Step 3: Send action to Regulator for compliance review ─
@@ -316,8 +377,15 @@ class OrchestratorAgent:
             pv = agent.get_portfolio_value(close, self.ticker)
             agent.portfolio_value_history.append(pv)
 
-            adj_type = adjusted.get("type", "HOLD")
+            adj_type = adjusted.get("action") or adjusted.get("type", "HOLD")
             adj_qty = adjusted.get("quantity", 0)
+
+            # Accumulate net volume for endogenous price impact
+            if reg_decision != "BLOCK" and adj_qty > 0:
+                if adj_type == "BUY":
+                    net_volume += adj_qty
+                elif adj_type == "SELL":
+                    net_volume -= adj_qty
 
             # Record trade marker for chart overlay
             if adj_type in ("BUY", "SELL") and adj_qty > 0 and reg_decision != "BLOCK":
@@ -334,7 +402,7 @@ class OrchestratorAgent:
             self.logger.log_trade(
                 step=self.current_step,
                 agent_name=agent.name,
-                action=adjusted.get("type", "HOLD"),
+                action=adj_type,
                 price=close,
                 quantity=adj_qty,
                 portfolio_value=pv,
@@ -362,7 +430,7 @@ class OrchestratorAgent:
                 )
             agent.update_after_step(reward, state)
 
-        # ── Step 7: Check circuit breakers ────────────────────────────
+        # ── Step 7: Check circuit breakers (per-agent + global) ────────
         self.circuit_breakers_active = 0
         for agent in self.agents:
             if not agent.active:
@@ -373,23 +441,44 @@ class OrchestratorAgent:
             if agent.halted:
                 self.circuit_breakers_active += 1
 
-        # ── Step 8: Advance market to next bar ────────────────────────
-        new_state, _, info = self.market.step({})
+        # Global halt: if overall system drawdown exceeds threshold
+        sys_risk = self.get_system_risk()
+        if sys_risk.get("global_drawdown_pct", 0) <= self.GLOBAL_HALT_DRAWDOWN_PCT:
+            self.trading_halted = True
+            self.logger.log_regulation_event(
+                step=self.current_step,
+                agent_name="SYSTEM",
+                rule_name="GlobalCircuitBreaker",
+                decision="BLOCK",
+                explanation=(
+                    f"Global drawdown {sys_risk['global_drawdown_pct']:.1f}% "
+                    f"breached {self.GLOBAL_HALT_DRAWDOWN_PCT}% threshold – "
+                    f"ALL TRADING HALTED."
+                ),
+            )
+
+        # ── Step 8: Advance market to next bar (endogenous price impact) ─
+        # Pass net_volume so the market adjusts the next simulated price
+        # based on aggregate agent order flow.
+        # step() now returns a dict (not tuple) with a "finished" key.
+        step_result = self.market.step(net_volume)
         self.current_step = self.market.current_step
 
-        # Append new price bar to history
-        new_bar = new_state["current_bar"]
+        # Append new price bar to history (fetch full bar from get_state)
+        market_state = self.market.get_state()
+        new_bar = market_state["current_bar"]
         self.price_history.append(new_bar)
 
         # Update peak total value for global drawdown tracking
+        sim_close = self.market.current_price
         total = sum(
-            a.get_portfolio_value(close, self.ticker)
+            a.get_portfolio_value(sim_close, self.ticker)
             for a in self.agents if a.active
         )
         if total > self._peak_total_value:
             self._peak_total_value = total
 
-        if info.get("finished"):
+        if step_result.get("finished"):
             self.finished = True
 
         return self.get_snapshot()
@@ -449,24 +538,93 @@ class OrchestratorAgent:
         return self.get_snapshot()
 
     # ------------------------------------------------------------------ #
-    # Trigger crash
+    # Whale-crash helpers
+    # ------------------------------------------------------------------ #
+
+    def _find_whale_agent(self) -> TradingAgent | None:
+        """Return the first AdversarialAgent instance, or *None*."""
+        for agent in self.agents:
+            if isinstance(agent, AdversarialAgent):
+                return agent
+        return None
+
+    def _is_whale(self, agent: TradingAgent) -> bool:
+        """True if *agent* is the whale (Adversarial) agent."""
+        return isinstance(agent, AdversarialAgent)
+
+    def _build_whale_dump(self, whale: TradingAgent) -> dict:
+        """Build a forced full-dump SELL for the whale agent."""
+        qty = whale.positions.get(self.ticker, 0)
+        reasoning = (
+            "Forced whale dump: 100% position liquidation for crash demo."
+        )
+        whale.last_action = "SELL"
+        whale.last_reasoning = reasoning
+        whale.last_reason = reasoning
+        return {
+            "action": "SELL",
+            "ticker": self.ticker,
+            "quantity": qty,
+            "reasoning": reasoning,
+        }
+
+    # ------------------------------------------------------------------ #
+    # Trigger crash  (whale manipulation → cascade → halt)
     # ------------------------------------------------------------------ #
 
     def trigger_crash(self) -> dict:
+        """Public entry – called by the Simulation facade / API."""
+        return self.trigger_market_crash()
+
+    def trigger_market_crash(self) -> dict:
         """
-        Trigger a market crash event:
-            1. Drop prices by 15-20 % from current step onward.
-            2. Triple volatility for 10 steps.
-            3. Activate circuit breakers on agents with > 10 % drawdown.
+        Demo scenario – Whale Manipulation / Cascade Crash:
+
+        1. Force the Adversarial "whale" agent to dump 100 % of its
+           holdings in one tick.
+        2. The large sell order flows through the normal pipeline:
+           agent action → regulator → market step with big negative
+           net_volume.
+        3. Subsequent ticks show momentum / other agents reacting
+           (stop-loss, trend reversal).
+        4. If drawdown or volatility exceeds thresholds, the
+           orchestrator activates the global circuit breaker.
+
+        The method records the crash step and activates
+        ``crash_mode_active`` so that ``run_step()`` can apply
+        cascade behaviour on following ticks.
         """
         if self.market is None:
             return {"error": "Simulation not initialised."}
 
+        whale = self._find_whale_agent()
+
+        # If whale has no position yet, give it a large one so the
+        # dump is visible.  This makes the demo reliable even when
+        # triggered early.
+        if whale and whale.active:
+            whale_qty = whale.positions.get(self.ticker, 0)
+            if whale_qty == 0:
+                close = self.market.current_price
+                buy_qty = int(whale.cash * 0.90 / close) if close > 0 else 0
+                if buy_qty > 0:
+                    whale.execute_action(
+                        {"action": "BUY", "ticker": self.ticker,
+                         "quantity": buy_qty,
+                         "reasoning": "Pre-crash whale position build-up."},
+                        close,
+                    )
+        elif whale and not whale.active:
+            # Re-enable the whale for the crash demo
+            whale.active = True
+            whale.halted = False
+
+        # Also drop the underlying OHLC data 15-20 % from the current
+        # step onward so technical indicators reflect a real crash.
         crash_pct = random.uniform(0.15, 0.20)
         step = self.market.current_step
         df = self.market.df
 
-        # Drop OHLC from current step onward
         for col in ["Open", "High", "Low", "Close"]:
             if col in df.columns:
                 df.loc[step:, col] = df.loc[step:, col] * (1 - crash_pct)
@@ -483,28 +641,22 @@ class OrchestratorAgent:
         df["Volatility"] = log_returns.rolling(window=20, min_periods=1).std() * 3
         df.fillna(0, inplace=True)
 
-        # Update crash state
+        # Record pre-crash price for cascade-drop tracking
+        self._pre_crash_price = self.market.current_price
+
+        # Mark crash mode
         self.crash_active = True
+        self.crash_mode_active = True
+        self._crash_triggered_step = self.current_step
         self._crash_steps_remaining = 10
         self._crash_vol_multiplier = 3.0
 
-        # Update price history with crashed bar
+        # Update price history bar to reflect new crashed OHLC
         if step < len(df):
             self.price_history[-1] = self.market._bar_to_dict(step)
 
-        # Check circuit breakers immediately
-        close_price = df.iloc[step]["Close"]
-        self.circuit_breakers_active = 0
-        for agent in self.agents:
-            if not agent.active:
-                continue
-            risk = agent.get_risk_metrics(close_price, self.ticker)
-            if risk["current_drawdown_pct"] <= -10.0:
-                agent.halted = True
-            if agent.halted:
-                self.circuit_breakers_active += 1
-
-        return self.get_snapshot()
+        # Run one step so the whale dump + cascade happen immediately
+        return self.run_step()
 
     # ------------------------------------------------------------------ #
     # System-wide risk metrics
@@ -601,6 +753,8 @@ class OrchestratorAgent:
                 "current_step": self.current_step,
                 "max_steps": self.max_steps,
                 "crash_active": self.crash_active,
+                "crash_mode_active": self.crash_mode_active,
+                "trading_halted": self.trading_halted,
                 "circuit_breakers_active": self.circuit_breakers_active,
                 "run_id": self.run_id,
             },
@@ -623,5 +777,10 @@ class OrchestratorAgent:
             "system_risk": self.get_system_risk(),
             # Crash state
             "crash_active": self.crash_active,
+            "crash_mode_active": self.crash_mode_active,
+            "trading_halted": self.trading_halted,
+            "trading_status": (
+                "HALTED_BY_CIRCUIT_BREAKER" if self.trading_halted else "ACTIVE"
+            ),
             "circuit_breakers_active": self.circuit_breakers_active,
         }
