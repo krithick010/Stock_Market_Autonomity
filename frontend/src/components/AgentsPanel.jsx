@@ -7,14 +7,14 @@ function riskColor(val) {
   return '#ef4444';
 }
 
-export default function AgentsPanel({ agents }) {
+export default function AgentsPanel({ agents, activeAgents }) {
   if (!agents || agents.length === 0) {
     return <div className="card"><h2>Agents</h2><p>No agents yet.</p></div>;
   }
 
   return (
     <div className="card">
-      <h2>Agents</h2>
+      <h2>Agents <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 400 }}>({agents.filter(a => a.active !== false).length} / {agents.length} active)</span></h2>
       <div className="agents-grid">
         {agents.map(agent => {
           const pos = agent.positions || {};

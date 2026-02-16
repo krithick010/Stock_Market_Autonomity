@@ -84,6 +84,10 @@ class MarketEnvironment:
     # 0.001 % of its historical value.  Tune for realistic results.
     DEFAULT_SENSITIVITY = 1e-5
 
+    # Number of recent simulated prices provided to the regulator for
+    # crash detection and window-based analysis.
+    RECENT_WINDOW_SIZE = 20
+
     def __init__(
         self,
         ticker: str,
@@ -140,6 +144,10 @@ class MarketEnvironment:
         self.current_price: float = initial_close
         self.price_history_simulated: list[float] = [initial_close]
 
+        # Historical price series (mirrors df["Close"] as a plain list
+        # so it can be cheaply included in every state dict).
+        self.price_history_historical: list[float] = [initial_close]
+
     # ------------------------------------------------------------------ #
     # Private helpers
     # ------------------------------------------------------------------ #
@@ -180,11 +188,22 @@ class MarketEnvironment:
             "t": self.current_step,
             "historical_price": float(row["Close"]),
             "simulated_price": float(self.current_price),
+            "price_history_historical": [
+                round(p, 4) for p in self.price_history_historical
+            ],
+            "price_history_simulated": [
+                round(p, 4) for p in self.price_history_simulated
+            ],
             "sma20": float(row["SMA20"]),
             "sma50": float(row["SMA50"]),
             "bb_up": float(row["BB_UP"]),
             "bb_low": float(row["BB_LOW"]),
             "volatility": float(row["Volatility"]),
+            # Recent window of simulated prices for regulator crash detection
+            "recent_simulated_window": [
+                round(p, 4)
+                for p in self.price_history_simulated[-self.RECENT_WINDOW_SIZE:]
+            ],
         }
 
     # ------------------------------------------------------------------ #
@@ -220,6 +239,14 @@ class MarketEnvironment:
             "simulated_price": round(self.current_price, 4),
             "price_history_simulated": [
                 round(p, 4) for p in self.price_history_simulated
+            ],
+            "price_history_historical": [
+                round(p, 4) for p in self.price_history_historical
+            ],
+            # Recent window of simulated prices for regulator crash detection
+            "recent_simulated_window": [
+                round(p, 4)
+                for p in self.price_history_simulated[-self.RECENT_WINDOW_SIZE:]
             ],
         }
 
@@ -270,6 +297,7 @@ class MarketEnvironment:
         # ── Update simulated price state ─────────────────────────────
         self.current_price = simulated_price
         self.price_history_simulated.append(simulated_price)
+        self.price_history_historical.append(hist_price_next)
 
         # NOTE: we intentionally do NOT patch self.df["Close"].
         # Historical data stays pristine; the simulated series is

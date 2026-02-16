@@ -208,13 +208,14 @@ class OrchestratorAgent:
         self.price_history = [state["current_bar"]]
 
         # Record initial portfolio values for every agent
-        close = state["current_bar"]["Close"]
+        # Use simulated price (at init, it equals historical close)
+        init_price = state.get("simulated_price", state["current_bar"]["Close"])
         for agent in self.agents:
-            pv = agent.get_portfolio_value(close, self.ticker)
+            pv = agent.get_portfolio_value(init_price, self.ticker)
             agent.portfolio_value_history.append(pv)
 
         self._peak_total_value = sum(
-            a.get_portfolio_value(close, self.ticker) for a in self.agents
+            a.get_portfolio_value(init_price, self.ticker) for a in self.agents
         )
 
         # 6. Create a new run in the SQLite database
@@ -263,12 +264,12 @@ class OrchestratorAgent:
             # Market is frozen – nobody trades.  Still advance the bar so
             # the chart keeps moving and the user can see the halt.
             state = self.market.get_state()
-            close = state["current_bar"]["Close"]
+            halt_price = state.get("simulated_price", state["current_bar"]["Close"])
             self.trades_at_step = []
             for agent in self.agents:
                 if not agent.active:
                     continue
-                pv = agent.get_portfolio_value(close, self.ticker)
+                pv = agent.get_portfolio_value(halt_price, self.ticker)
                 agent.portfolio_value_history.append(pv)
                 agent.last_reason = "Trading halted by circuit breaker"
                 agent.last_reasoning = agent.last_reason
@@ -276,7 +277,7 @@ class OrchestratorAgent:
                     step=self.current_step,
                     agent_name=agent.name,
                     action="HOLD",
-                    price=close,
+                    price=halt_price,
                     quantity=0,
                     portfolio_value=pv,
                     reason="Trading halted by circuit breaker",
@@ -294,12 +295,15 @@ class OrchestratorAgent:
         # ── Step 1: Get current market state ──────────────────────────
         state = self.market.get_state()
         bar = state["current_bar"]
-        close = bar["Close"]
+        # Use simulated price as the actual trading price for all agents.
+        # Historical Close is preserved in bar["Close"] for reference.
+        sim_close = state.get("simulated_price", bar.get("Close", 0))
 
         # Inject ticker + simulated price data into bar for regulator
         bar["ticker"] = self.ticker
-        bar["simulated_price"] = state.get("simulated_price", bar.get("Close", 0))
+        bar["simulated_price"] = sim_close
         bar["price_history_simulated"] = state.get("price_history_simulated", [])
+        bar["recent_simulated_window"] = state.get("recent_simulated_window", [])
 
         # Handle crash volatility decay
         if self._crash_steps_remaining > 0:
@@ -323,13 +327,13 @@ class OrchestratorAgent:
             if agent.halted:
                 agent.last_reason = "HALTED by circuit breaker"
                 agent.last_reasoning = agent.last_reason
-                pv = agent.get_portfolio_value(close, self.ticker)
+                pv = agent.get_portfolio_value(sim_close, self.ticker)
                 agent.portfolio_value_history.append(pv)
                 self.logger.log_trade(
                     step=self.current_step,
                     agent_name=agent.name,
                     action="HOLD",
-                    price=close,
+                    price=sim_close,
                     quantity=0,
                     portfolio_value=pv,
                     reason="HALTED by circuit breaker",
@@ -356,7 +360,7 @@ class OrchestratorAgent:
             action.setdefault("ticker", self.ticker)
 
             # ── Step 3: Send action to Regulator for compliance review ─
-            agent_state = self._build_agent_state(agent, close)
+            agent_state = self._build_agent_state(agent, sim_close)
             review = self.regulator.review_trade(
                 agent_name=agent.name,
                 action=action,
@@ -371,10 +375,10 @@ class OrchestratorAgent:
 
             # ── Step 4: Apply approved / warned action to portfolio ──
             if reg_decision in ("APPROVE", "WARN"):
-                agent.execute_action(adjusted, close)
+                agent.execute_action(adjusted, sim_close)
 
             # ── Step 5: Compute new portfolio value and log ──────────
-            pv = agent.get_portfolio_value(close, self.ticker)
+            pv = agent.get_portfolio_value(sim_close, self.ticker)
             agent.portfolio_value_history.append(pv)
 
             adj_type = adjusted.get("action") or adjusted.get("type", "HOLD")
@@ -392,7 +396,7 @@ class OrchestratorAgent:
                 self.trades_at_step.append({
                     "agent": agent.name,
                     "type": adj_type,
-                    "price": round(close, 2),
+                    "price": round(sim_close, 2),
                     "quantity": adj_qty,
                     "step": self.current_step,
                     "reason": agent.last_reason,
@@ -403,7 +407,7 @@ class OrchestratorAgent:
                 step=self.current_step,
                 agent_name=agent.name,
                 action=adj_type,
-                price=close,
+                price=sim_close,
                 quantity=adj_qty,
                 portfolio_value=pv,
                 reason=agent.last_reason,
@@ -435,7 +439,7 @@ class OrchestratorAgent:
         for agent in self.agents:
             if not agent.active:
                 continue
-            risk = agent.get_risk_metrics(close, self.ticker)
+            risk = agent.get_risk_metrics(sim_close, self.ticker)
             if risk["current_drawdown_pct"] <= -10.0 and not agent.halted:
                 agent.halted = True
             if agent.halted:
@@ -673,7 +677,8 @@ class OrchestratorAgent:
             return {}
 
         state = self.market.get_state()
-        close = state["current_bar"]["Close"]
+        # Use simulated price for all portfolio / exposure calculations
+        close = state.get("simulated_price", state["current_bar"]["Close"])
 
         total_exposure = 0.0
         open_positions = 0
@@ -730,7 +735,8 @@ class OrchestratorAgent:
             return {"error": "Simulation not initialised."}
 
         state = self.market.get_state()
-        close = state["current_bar"]["Close"]
+        # Use simulated price for portfolio calculations
+        close = state.get("simulated_price", state["current_bar"]["Close"])
 
         # Per-agent data with enriched status field
         agents_data = []
@@ -755,6 +761,10 @@ class OrchestratorAgent:
                 "crash_active": self.crash_active,
                 "crash_mode_active": self.crash_mode_active,
                 "trading_halted": self.trading_halted,
+                "trading_status": (
+                    "HALTED_BY_CIRCUIT_BREAKER" if self.trading_halted
+                    else ("RUNNING" if not self.finished else "FINISHED")
+                ),
                 "circuit_breakers_active": self.circuit_breakers_active,
                 "run_id": self.run_id,
             },
@@ -780,7 +790,12 @@ class OrchestratorAgent:
             "crash_mode_active": self.crash_mode_active,
             "trading_halted": self.trading_halted,
             "trading_status": (
-                "HALTED_BY_CIRCUIT_BREAKER" if self.trading_halted else "ACTIVE"
+                "HALTED_BY_CIRCUIT_BREAKER" if self.trading_halted
+                else ("RUNNING" if not self.finished else "FINISHED")
+            ),
+            "halt_reason": (
+                "Global drawdown exceeded -15%."
+                if self.trading_halted else ""
             ),
             "circuit_breakers_active": self.circuit_breakers_active,
         }

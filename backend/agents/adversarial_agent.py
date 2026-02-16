@@ -36,6 +36,7 @@ class AdversarialAgent(TradingAgent):
 
     def __init__(self, name: str, initial_cash: float = 100_000.0, params: dict | None = None):
         super().__init__(name, initial_cash)
+        self.goal = "Stress-test compliance with manipulative behaviour."
         params = params or {}
         self.PUMP_FRACTION = params.get("pump_fraction", 0.25)
         self.DUMP_THRESHOLD = params.get("dump_threshold", 0.03)
@@ -63,11 +64,14 @@ class AdversarialAgent(TradingAgent):
     def decide(self) -> dict:
         state = self._state
         if state is None:
-            return {"type": "HOLD", "ticker": "", "quantity": 0}
+            self.last_action = "HOLD"
+            self.last_reasoning = "No market state available."
+            return {"action": "HOLD", "ticker": "", "quantity": 0, "reasoning": self.last_reasoning}
 
         bar = state["current_bar"]
         ticker = bar.get("ticker", "")
-        close = bar["Close"]
+        # Use simulated price as the actual trading price
+        close = bar.get("SimulatedPrice", bar.get("Close", 0))
         held_qty = self.positions.get(ticker, 0)
         avg = self.avg_cost.get(ticker, 0)
 
@@ -76,12 +80,16 @@ class AdversarialAgent(TradingAgent):
             gain_pct = (close - avg) / avg
             if gain_pct >= self.DUMP_THRESHOLD:
                 self._phase = "dump"
-                self.last_reason = (
+                reasoning = (
                     f"DUMP phase: gain {gain_pct*100:.1f}% >= "
                     f"{self.DUMP_THRESHOLD*100:.0f}% threshold, "
-                    f"dumping {held_qty} shares at {close:.2f}"
+                    f"dumping {held_qty} shares at {close:.2f}. "
+                    f"Detected low liquidity after pump phase -> initiating 100% dump."
                 )
-                return {"type": "SELL", "ticker": ticker, "quantity": held_qty}
+                self.last_action = "SELL"
+                self.last_reasoning = reasoning
+                self.last_reason = reasoning
+                return {"action": "SELL", "ticker": ticker, "quantity": held_qty, "reasoning": reasoning}
 
         # ---------- Pump phase ----------
         if self._is_low_volume() and random.random() < self.PUMP_PROBABILITY:
@@ -90,12 +98,18 @@ class AdversarialAgent(TradingAgent):
             ) if close > 0 else 0
             if affordable > 0:
                 self._phase = "pump"
-                self.last_reason = (
+                reasoning = (
                     f"PUMP phase: low-volume zone detected, "
-                    f"burst-buying {affordable} shares at {close:.2f}"
+                    f"burst-buying {affordable} shares at {close:.2f}."
                 )
-                return {"type": "BUY", "ticker": ticker, "quantity": affordable}
+                self.last_action = "BUY"
+                self.last_reasoning = reasoning
+                self.last_reason = reasoning
+                return {"action": "BUY", "ticker": ticker, "quantity": affordable, "reasoning": reasoning}
 
         self._phase = "idle"
-        self.last_reason = "Adversarial agent idle – conditions not met"
-        return {"type": "HOLD", "ticker": ticker, "quantity": 0}
+        reasoning = "Adversarial agent idle - conditions not met for pump or dump."
+        self.last_action = "HOLD"
+        self.last_reasoning = reasoning
+        self.last_reason = reasoning
+        return {"action": "HOLD", "ticker": ticker, "quantity": 0, "reasoning": reasoning}

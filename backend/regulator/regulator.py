@@ -185,22 +185,29 @@ class RegulatorAgent:
     def _compute_crash_drop(self, market_state: dict) -> float:
         """
         Compute the percentage change between the current simulated price
-        and the average of the last ``CRASH_LOOKBACK`` simulated prices.
+        and the average of the recent simulated price window.
+
+        Prefers ``recent_simulated_window`` (pushed by MarketEnvironment)
+        and falls back to ``price_history_simulated`` for backward compat.
 
         Returns a negative float when the market is falling (e.g. -0.07
         for a 7 % drop).  Returns 0.0 if insufficient history is available.
         """
         current_price = market_state.get("simulated_price", 0)
-        history = market_state.get("price_history_simulated", [])
 
-        if not history or current_price <= 0:
+        # Prefer the pre-sliced window provided by MarketEnvironment
+        window = market_state.get("recent_simulated_window", None)
+        if not window:
+            history = market_state.get("price_history_simulated", [])
+            window = history[-self.CRASH_LOOKBACK:] if history else []
+
+        if not window or current_price <= 0:
             return 0.0
 
-        lookback = history[-self.CRASH_LOOKBACK:]   # last N prices
-        if len(lookback) < 2:
+        if len(window) < 2:
             return 0.0
 
-        avg_recent = sum(lookback) / len(lookback)
+        avg_recent = sum(window) / len(window)
         if avg_recent <= 0:
             return 0.0
 
