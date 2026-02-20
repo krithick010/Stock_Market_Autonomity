@@ -28,15 +28,23 @@ Every decision includes a structured **reasoning** string for transparent, inter
 | **NoiseTrader** | Random small trades to inject realistic noise | Simulate retail activity |
 | **Adversarial** | Pump-and-dump: burst buys in low-volume, dumps on gain | Stress-test the Regulator |
 
-All agents return a **structured decision dict**:
-```python
-{"action": "BUY"|"SELL"|"HOLD", "quantity": int, "reasoning": str}
+All agents implement the **Agentic Loop** (Phase-2 refactor):
 ```
+Perceive → Reason → Act → Record Memory
+```
+Each agent overrides `reason(observation)` with its own rule-based strategy.
+The orchestrator calls `agent.step(market_state, step_index)` which returns:
+```python
+{"action": "BUY"|"SELL"|"HOLD", "quantity": int, "ticker": str, "reasoning": str}
+```
+Every step is recorded in per-agent `memory` with observation, plan, action, and reward.
 
 ---
 
 ## Key Features
 
+- **Agentic loop architecture** — Perceive → Reason → Act → Record Memory per agent per step
+- **Per-agent memory & performance stats** — every step recorded with observation, plan, action, reward; PnL/wins/losses/trades tracked
 - **Structured decisions with reasoning** — every agent explains why it acted
 - **5 compliance rules** — MaxPosition, MaxOrder, BurstTrading, AdversarialFlag, ContrарianCrashDetection
 - **Whale Manipulation / Cascade Crash** — one-click demo: whale dumps → price crash → momentum agents panic-sell → global circuit breaker halts trading
@@ -57,9 +65,9 @@ backend/
   market/
     market.py                  # Market data download & endogenous price model
   agents/
-    base_agent.py              # TradingAgent base class (structured decisions,
-                               #   build_reasoning helper, goal/last_action/
-                               #   last_reasoning attributes)
+    base_agent.py              # TradingAgent base class with agentic loop:
+                               #   perceive() → reason() → act() → step()
+                               #   memory, performance_stats, explain_last_action()
     conservative_agent.py
     momentum_agent.py
     mean_reversion_agent.py

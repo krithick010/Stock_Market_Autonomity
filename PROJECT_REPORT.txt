@@ -3,8 +3,9 @@
 ================================================================================
   Project  : Multi-Agent Stock Market AI Autonomity
   Repo     : https://github.com/dhanushkumar-karuppasamy/Stock_Market_Autonomity
-  Purpose  : DevHack 2026 Phase-1 "Agentic AI" submission
+  Purpose  : DevHack 2026 Phase-1 & Phase-2 "Agentic AI" submission
   Date     : February 2026
+  Updated  : Phase-2 — Agentic Loop Refactor (Perceive → Reason → Act)
 ================================================================================
 
 
@@ -282,8 +283,10 @@ Class: OrchestratorAgent
         Guard:  If trading_halted → force all agents to HOLD, advance bar,
                 return snapshot with "HALTED_BY_CIRCUIT_BREAKER" status
         Step 1: Get current market state (price, indicators)
-        Step 2: Ask each active agent for an action (BUY/SELL/HOLD)
-                • On the crash-trigger step, the whale’s decide() is
+        Step 2: Ask each active agent via agent.step(state, step_index)
+                using the agentic loop: Perceive → Reason → Act.
+                Records memory and performance_stats per agent.
+                • On the crash-trigger step, the whale’s action is
                   overridden with the forced full-dump SELL action
         Step 3: Send each action to Regulator for compliance review
         Step 4: Apply APPROVED/WARN actions to agent portfolios
@@ -339,7 +342,9 @@ Class: OrchestratorAgent
         - current_bar, price_history
         - agents: [{name, cash, positions, portfolio_value, last_action,
                     last_reasoning, last_reason, goal, halted, active,
-                    status, return_pct, max_drawdown_pct, sharpe_ratio}, ...]
+                    status, return_pct, max_drawdown_pct, sharpe_ratio,
+                    pnl, wins, losses, trades}, ...]
+                  (pnl/wins/losses/trades added in Phase-2)
         - trade_log, regulation_log, trades_at_step
         - system_risk, crash_active, crash_mode_active
         - trading_halted, trading_status ("ACTIVE" / "HALTED_BY_CIRCUIT_BREAKER")
@@ -382,10 +387,13 @@ Class: MarketEnvironment
 
 
 ────────────────────────────────────────────────────────────────────────────────
-5.5  Base Agent (agents/base_agent.py)
+5.5  Base Agent (agents/base_agent.py)  [UPDATED – Phase-2 Agentic Loop]
 ────────────────────────────────────────────────────────────────────────────────
 
 Abstract base class for all 5 trading agents.
+Refactored in Phase-2 to implement an explicit agentic loop:
+
+    Perception → Memory → Reasoning → Action
 
 Class: TradingAgent
 
@@ -398,44 +406,72 @@ Class: TradingAgent
     goal (str)              – strategic objective (set by subclasses)
     _state, halted, active, _peak_value
 
-  Methods:
-    __init__(name, initial_cash=100_000)
-    observe_market_state(state)       – store market state for decide()
+    NEW in Phase-2:
+    memory (list[dict])     – per-step records of the full agentic loop:
+                              [{step, observation, decision_plan, action, reward}]
+    performance_stats (dict) – running counters:
+                              {pnl: float, wins: int, losses: int, trades: int}
 
-    decide() → dict                   – returns structured decision:
-                                        {"action": "BUY"|"SELL"|"HOLD",
-                                         "quantity": int,
-                                         "reasoning": str}
-                                        Default impl returns HOLD with
-                                        "Base agent does not implement
-                                         a strategy." reasoning.
-                                        Sets self.last_action and
-                                        self.last_reasoning after each call.
+  Agentic Loop Methods (NEW in Phase-2):
 
-    build_reasoning(**kwargs) → str    – utility to build concise reasoning
-                                        strings from key indicators, e.g.
-                                        build_reasoning(RSI=25,
-                                          price_vs_BB="below BB_LOW")
-                                        → "RSI=25, price_vs_BB=below BB_LOW"
+    perceive(market_state) → dict
+      Default implementation:
+        - Stores market_state into self._state (backward compat)
+        - Extracts: price, ticker, sma20, sma50, bb_up, bb_low, volatility
+        - Subclasses may override to add extra features (e.g. volume)
 
-    update_after_step(reward, state)  – adaptation hook (no-op default)
-    get_portfolio_value(price, ticker) – cash + holdings value
+    reason(observation) → dict
+      Base class returns: {intent: "HOLD", size_factor: 0.0, ticker, notes}
+      Concrete agents override with rule-based strategy logic:
+        - MomentumAgent: SMA crossover rules
+        - ConservativeAgent: volatility filter + stop-loss
+        - MeanReversionAgent: Bollinger Band oversold/overbought
+        - NoiseTrader: random dice roll
+        - AdversarialAgent: pump-and-dump volume detection
 
-    execute_action(action, price)     – apply BUY/SELL to cash/positions;
-                                        supports both "action" and legacy
-                                        "type" keys; updates last_action,
-                                        last_reasoning, last_reason
+    act(decision_plan) → dict
+      Converts internal plan into canonical action dict:
+        - Maps intent → action, size_factor → quantity
+        - Builds reasoning string via build_reasoning()
+        - Returns: {action, ticker, quantity, reasoning}
 
-    get_risk_metrics(price, ticker)   – return_pct, max_drawdown_pct,
-                                        sharpe_ratio, current_drawdown_pct
+    step(market_state, step_index=None) → dict
+      Main entry-point for the orchestrator:
+        1. observation = perceive(market_state)
+        2. decision_plan = reason(observation)
+        3. action = act(decision_plan)
+        4. Updates last_action, last_reasoning, last_reason
+        5. Computes reward (portfolio value change)
+        6. Calls _record_memory(step, observation, plan, action, reward)
+        7. Returns action dict
 
-    to_dict(price, ticker)            – serialize for frontend; includes
-                                        last_action, last_reasoning,
-                                        last_reason, goal, status
+    _record_memory(step, observation, decision_plan, action, reward)
+      Appends to self.memory, updates performance_stats:
+        - trades++ on BUY/SELL
+        - wins++ if reward > 0, losses++ if reward < 0
+        - pnl += reward
+
+    explain_last_action() → str
+      Returns self.last_reasoning or "No action taken yet."
+      Used by orchestrator for logging and UI activity feed.
+
+  Legacy Methods (kept for backward compatibility):
+    observe_market_state(state)  – stores _state; prefer step() in new code
+    decide() → dict              – thin wrapper: calls step(self._state)
+
+  Existing Helpers (unchanged):
+    build_reasoning(**kwargs) → str
+    update_after_step(reward, state)
+    get_portfolio_value(price, ticker)
+    execute_action(action, price)
+    get_risk_metrics(price, ticker)
+    to_dict(price, ticker)         – NOW also includes:
+                                     pnl, wins, losses, trades
+                                     (from performance_stats)
 
 
 ────────────────────────────────────────────────────────────────────────────────
-5.6  Conservative Agent (agents/conservative_agent.py)
+5.6  Conservative Agent (agents/conservative_agent.py)  [UPDATED – Phase-2]
 ────────────────────────────────────────────────────────────────────────────────
 
 Class: ConservativeAgent(TradingAgent)
@@ -447,17 +483,21 @@ Class: ConservativeAgent(TradingAgent)
     POSITION_FRACTION      – % of cash per trade (default 7%)
     STOP_LOSS_PCT          – stop-loss threshold (default 3%)
 
-  Decision Logic:
-    1. Stop-loss: if holding & price < avg_cost × (1 − 3%) → SELL all
-    2. Volatility filter: if vol > 0.02 → HOLD
-    3. Entry: if price < SMA50 AND SMA20 > SMA50 AND no position → BUY small
-    4. Default: HOLD
+  Agentic Overrides (Phase-2):
+    reason(observation) → dict
+      Rule-based strategy using observation features:
+      1. Stop-loss: if holding & price < avg_cost × (1 − 3%) → SELL all
+      2. Volatility filter: if vol > 0.02 → HOLD
+      3. Entry: if price < SMA50 AND SMA20 > SMA50 AND no position → BUY small
+      4. Default: HOLD
+      Returns: {intent, size_factor, ticker, notes}
 
-  Produces detailed last_reason for every decision.
+    perceive(), act(), step() – inherited from TradingAgent base class.
+    All logic is rule-based, no LLMs.
 
 
 ────────────────────────────────────────────────────────────────────────────────
-5.7  Momentum Agent (agents/momentum_agent.py)
+5.7  Momentum Agent (agents/momentum_agent.py)  [UPDATED – Phase-2]
 ────────────────────────────────────────────────────────────────────────────────
 
 Class: MomentumAgent(TradingAgent)
@@ -467,14 +507,19 @@ Class: MomentumAgent(TradingAgent)
   Configurable Parameters:
     POSITION_FRACTION – % of cash per trade (default 15%)
 
-  Decision Logic:
-    1. Golden cross: SMA20 > SMA50 & no position → BUY
-    2. Death cross:  SMA20 < SMA50 & holding → SELL all
-    3. Default: HOLD (riding trend or no signal)
+  Agentic Overrides (Phase-2):
+    reason(observation) → dict
+      SMA crossover rules:
+      1. Golden cross: SMA20 > SMA50 & no position → BUY
+      2. Death cross:  SMA20 < SMA50 & holding → SELL all
+      3. Default: HOLD (riding trend or no signal)
+      Returns: {intent, size_factor, ticker, notes}
+
+    perceive(), act(), step() – inherited from TradingAgent base class.
 
 
 ────────────────────────────────────────────────────────────────────────────────
-5.8  Mean-Reversion Agent (agents/mean_reversion_agent.py)
+5.8  Mean-Reversion Agent (agents/mean_reversion_agent.py)  [UPDATED – Phase-2]
 ────────────────────────────────────────────────────────────────────────────────
 
 Class: MeanReversionAgent(TradingAgent)
@@ -485,14 +530,22 @@ Class: MeanReversionAgent(TradingAgent)
     POSITION_FRACTION – % of cash per trade (default 12%)
     BAND_MULTIPLIER   – Bollinger Band width multiplier (default 2.0)
 
-  Decision Logic:
-    1. Oversold: price < BB_LOW → BUY
-    2. Overbought: price > BB_UP & holding → SELL all
-    3. Default: HOLD (within normal bands)
+  Agentic Overrides (Phase-2):
+    perceive(market_state) → dict
+      Adds bb_mid from BB_MID in the market bar.
+
+    reason(observation) → dict
+      Bollinger Band mean-reversion rules:
+      1. Oversold: price < BB_LOW → BUY
+      2. Overbought: price > BB_UP & holding → SELL all
+      3. Default: HOLD (within normal bands)
+      Returns: {intent, size_factor, ticker, notes}
+
+    act(), step() – inherited from TradingAgent base class.
 
 
 ────────────────────────────────────────────────────────────────────────────────
-5.9  Noise Trader (agents/noise_trader.py)
+5.9  Noise Trader (agents/noise_trader.py)  [UPDATED – Phase-2]
 ────────────────────────────────────────────────────────────────────────────────
 
 Class: NoiseTrader(TradingAgent)
@@ -503,14 +556,19 @@ Class: NoiseTrader(TradingAgent)
     TRADE_PROBABILITY – chance to trade each step (default 15%)
     POSITION_FRACTION – % of cash per trade (default 2%)
 
-  Decision Logic:
-    1. Each step: 15% chance to trade, 85% HOLD
-    2. If trading: 50/50 BUY random qty or SELL random portion of holdings
-    3. Very small position sizes to simulate noise
+  Agentic Overrides (Phase-2):
+    reason(observation) → dict
+      Random-trade strategy:
+      1. Each step: 15% chance to trade, 85% HOLD
+      2. If trading: 50/50 BUY random qty or SELL random portion of holdings
+      3. Encodes exact random qty into size_factor for act()
+      Returns: {intent, size_factor, ticker, notes}
+
+    perceive(), act(), step() – inherited from TradingAgent base class.
 
 
 ────────────────────────────────────────────────────────────────────────────────
-5.10  Adversarial Agent (agents/adversarial_agent.py)
+5.10  Adversarial Agent (agents/adversarial_agent.py)  [UPDATED – Phase-2]
 ────────────────────────────────────────────────────────────────────────────────
 
 Class: AdversarialAgent(TradingAgent)
@@ -527,12 +585,21 @@ Class: AdversarialAgent(TradingAgent)
     _volume_history – tracks volume for percentile analysis
     _phase          – "idle" / "pump" / "dump"
 
-  Decision Logic:
-    1. Dump phase: if holding & unrealised gain ≥ 3% → SELL all
-    2. Pump phase: if current volume in bottom 30% & random trigger → BUY large
-    3. Default: HOLD (idle)
+  Agentic Overrides (Phase-2):
+    perceive(market_state) → dict
+      Extends base perceive() with volume tracking:
+      - Appends volume to _volume_history for percentile analysis
+      - Adds "volume" to observation dict
 
-  Labels all trades as "PUMP phase" or "DUMP phase" in last_reason.
+    reason(observation) → dict
+      Pump-and-dump rules:
+      1. Dump phase: if holding & unrealised gain ≥ 3% → SELL all
+      2. Pump phase: if current volume in bottom 30% & random trigger → BUY large
+      3. Default: HOLD (idle)
+      Returns: {intent, size_factor, ticker, notes}
+      Labels all trades as "PUMP phase" or "DUMP phase" in notes.
+
+    act(), step() – inherited from TradingAgent base class.
 
 
 ────────────────────────────────────────────────────────────────────────────────

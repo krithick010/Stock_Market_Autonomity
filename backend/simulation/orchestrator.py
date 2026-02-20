@@ -344,7 +344,7 @@ class OrchestratorAgent:
 
             # ── Step 2: Ask agent for an action ───────────────────────
             # Each agent is an autonomous, goal-driven, rule-based decision maker.
-            agent.observe_market_state(state)
+            # Uses the agentic loop: Perceive → Reason → Act (via step()).
 
             # If this is the whale agent on the crash-trigger step,
             # override its decision with the forced dump.
@@ -355,7 +355,7 @@ class OrchestratorAgent:
             ):
                 action = self._build_whale_dump(agent)
             else:
-                action = agent.decide()
+                action = agent.step(state, step_index=self.current_step)
 
             action.setdefault("ticker", self.ticker)
 
@@ -403,6 +403,7 @@ class OrchestratorAgent:
                 })
 
             # Log trade (in-memory + SQLite)
+            explanation = agent.explain_last_action()
             self.logger.log_trade(
                 step=self.current_step,
                 agent_name=agent.name,
@@ -410,7 +411,7 @@ class OrchestratorAgent:
                 price=sim_close,
                 quantity=adj_qty,
                 portfolio_value=pv,
-                reason=agent.last_reason,
+                reason=explanation,
                 decision=reg_decision,
                 decision_reason=reg_reason,
             )
@@ -765,6 +766,10 @@ class OrchestratorAgent:
                     "HALTED_BY_CIRCUIT_BREAKER" if self.trading_halted
                     else ("RUNNING" if not self.finished else "FINISHED")
                 ),
+                "halt_reason": (
+                    "Global drawdown exceeded -15%."
+                    if self.trading_halted else ""
+                ),
                 "circuit_breakers_active": self.circuit_breakers_active,
                 "run_id": self.run_id,
             },
@@ -797,5 +802,7 @@ class OrchestratorAgent:
                 "Global drawdown exceeded -15%."
                 if self.trading_halted else ""
             ),
+            # Alias expected by some frontend components
+            "total_violations_count": self.get_system_risk().get("violation_count", 0),
             "circuit_breakers_active": self.circuit_breakers_active,
         }
