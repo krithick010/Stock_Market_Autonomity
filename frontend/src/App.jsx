@@ -1,6 +1,8 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { initSimulation, stepSimulation, jumpToStep, triggerCrash } from './api/client';
-import ControlsPanel from './components/ControlsPanel';
+import TopBar from './components/TopBar';
+import LeftSidebar from './components/LeftSidebar';
+import RightTradePanel from './components/RightTradePanel';
 import PriceChart from './components/PriceChart';
 import AgentsPanel from './components/AgentsPanel';
 import TradeLogTable from './components/TradeLogTable';
@@ -163,41 +165,28 @@ export default function App() {
   const step = snapshot?.step ?? 0;
   const maxSteps = snapshot?.max_steps ?? 0;
 
+  // Calculate total balance from all agents
+  const totalBalance = snapshot?.agents?.reduce((sum, agent) => sum + (agent.portfolio_value || 0), 0) || 0;
+
   return (
     <div className={`app-container theme-${theme}${crashFlash ? ' crash-flash' : ''}`}>
-      <header className="app-header terminal-topbar">
-        <div className="header-row">
-          <div>
-            <h1>Multi-Agent Stock Market AI Autonomity</h1>
-            <p>Simulated financial ecosystem with autonomous trading agents, regulation &amp; full audit trail</p>
-          </div>
-          <button
-            className="btn btn-theme"
-            onClick={() => setTheme(prev => (prev === 'light' ? 'dark' : 'light'))}
-            aria-label="Toggle light and dark mode"
-          >
-            {theme === 'light' ? '🌙 Dark Mode' : '☀️ Light Mode'}
-          </button>
-        </div>
-      </header>
+      <TopBar
+        ticker={ticker}
+        setTicker={setTicker}
+        period={period}
+        setPeriod={setPeriod}
+        theme={theme}
+        setTheme={setTheme}
+        balance={totalBalance}
+        crashActive={snapshot?.crash_active}
+      />
 
       {error && <div className="error-banner">⚠ {error}</div>}
 
-      <div className="terminal-layout">
-        <aside className="left-rail">
-          <section className="card beginner-guide" aria-label="Beginner Guide">
-            <h2>New here? Read this first</h2>
-            <ul>
-              <li>Click <strong>Initialize Market</strong> to load data and start the simulation.</li>
-              <li>Use <strong>Run One Step</strong> to see one decision cycle at a time, or <strong>Auto Run</strong> for continuous play.</li>
-              <li>In each AI card, read <strong>AI Thinking Flow</strong>: Perceive → Reason → Act → Result.</li>
-              <li><strong>Profit %</strong> and <strong>Current Drop</strong> show how each strategy is performing right now.</li>
-              <li><strong>AI Memory Entries</strong> tells you how many decision records that agent has stored.</li>
-            </ul>
-          </section>
-        </aside>
+      <div className="olymp-layout">
+        <LeftSidebar />
 
-        <main className="terminal-center">
+        <main className="olymp-center">
           <PriceChart
             priceHistory={snapshot?.price_history}
             tradesAtStep={snapshot?.trades_at_step}
@@ -223,28 +212,27 @@ export default function App() {
           <RegulationLogTable regulationLog={snapshot?.regulation_log} />
         </main>
 
-        <aside className="terminal-right-panel">
-          <ControlsPanel
-            ticker={ticker} setTicker={setTicker}
-            period={period} setPeriod={setPeriod}
-            interval={interval_} setInterval_={setInterval_}
-            onInit={handleInit}
-            onStep={handleStep}
-            onAutoRun={handleAutoRun}
-            onPause={handlePause}
-            onCrash={handleCrash}
-            status={status}
-            step={step}
-            maxSteps={maxSteps}
-            speedMs={speedMs} setSpeedMs={setSpeedMs}
-            batchSize={batchSize} setBatchSize={setBatchSize}
-            activeAgents={activeAgents}
-            allAgents={ALL_AGENTS}
-            toggleAgent={toggleAgent}
-            onOpenSettings={() => setShowSettings(true)}
-            crashActive={snapshot?.crash_active}
-          />
-        </aside>
+        <RightTradePanel
+          interval={interval_}
+          setInterval_={setInterval_}
+          speedMs={speedMs}
+          setSpeedMs={setSpeedMs}
+          batchSize={batchSize}
+          setBatchSize={setBatchSize}
+          activeAgents={activeAgents}
+          allAgents={ALL_AGENTS}
+          toggleAgent={toggleAgent}
+          onStep={handleStep}
+          onAutoRun={handleAutoRun}
+          onPause={handlePause}
+          onInit={handleInit}
+          status={status}
+          step={step}
+          maxSteps={maxSteps}
+          crashActive={snapshot?.crash_active}
+          onCrash={handleCrash}
+          onOpenSettings={() => setShowSettings(true)}
+        />
       </div>
 
       {showSettings && (
