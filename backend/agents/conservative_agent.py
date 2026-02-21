@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Conservative Agent – low-risk, small positions, only trades in calm markets.
 Supports configurable risk_pct and stop_loss_pct via params dict.
@@ -36,50 +38,59 @@ class ConservativeAgent(TradingAgent):
         self.POSITION_FRACTION = params.get("risk_pct", 0.07)
         self.STOP_LOSS_PCT = params.get("stop_loss_pct", 0.03)
 
-    def decide(self) -> dict:
-        state = self._state
-        if state is None:
-            return {"type": "HOLD", "ticker": "", "quantity": 0}
-
-        bar = state["current_bar"]
+    def perceive(self, market_state: dict) -> dict:
+        super().perceive(market_state)
+        bar = market_state.get("current_bar", {})
         ticker = bar.get("ticker", "")
-        close = bar["Close"]
-        sma20 = bar.get("SMA20", close)
-        sma50 = bar.get("SMA50", close)
-        vol = bar.get("Volatility", 0)
+        close = bar.get("Close", 0.0)
+        return {
+            "ticker": ticker,
+            "close": close,
+            "sma20": bar.get("SMA20", close),
+            "sma50": bar.get("SMA50", close),
+            "volatility": bar.get("Volatility", 0),
+            "held_qty": self.positions.get(ticker, 0),
+            "avg_cost": self.avg_cost.get(ticker, 0),
+        }
 
-        held_qty = self.positions.get(ticker, 0)
-        avg = self.avg_cost.get(ticker, 0)
+    def reason(self, observation: dict) -> dict:
+        if not observation or not observation.get("ticker"):
+            return {"action": "HOLD", "ticker": "", "quantity": 0, "reasoning": "No valid observation"}
 
-        # ---------- Stop-loss check ----------
+        ticker = observation["ticker"]
+        close = observation["close"]
+        sma20 = observation["sma20"]
+        sma50 = observation["sma50"]
+        vol = observation["volatility"]
+        held_qty = observation["held_qty"]
+        avg = observation["avg_cost"]
+
         if held_qty > 0 and avg > 0:
             if close < avg * (1 - self.STOP_LOSS_PCT):
-                self.last_reason = (
+                reasoning = (
                     f"Stop-loss triggered: price {close:.2f} < "
                     f"{avg*(1-self.STOP_LOSS_PCT):.2f} "
                     f"(avg_cost {avg:.2f} - {self.STOP_LOSS_PCT*100}%)"
                 )
-                return {"type": "SELL", "ticker": ticker, "quantity": held_qty}
+                return {"action": "SELL", "ticker": ticker, "quantity": held_qty, "reasoning": reasoning}
 
-        # ---------- Volatility filter ----------
         if vol > self.VOLATILITY_THRESHOLD:
-            self.last_reason = (
+            reasoning = (
                 f"HOLD – volatility {vol:.4f} exceeds threshold "
                 f"{self.VOLATILITY_THRESHOLD}"
             )
-            return {"type": "HOLD", "ticker": ticker, "quantity": 0}
+            return {"action": "HOLD", "ticker": ticker, "quantity": 0, "reasoning": reasoning}
 
-        # ---------- Entry condition ----------
         if close < sma50 and sma20 > sma50 and held_qty == 0:
             affordable = int(
                 (self.cash * self.POSITION_FRACTION) / close
             ) if close > 0 else 0
             if affordable > 0:
-                self.last_reason = (
+                reasoning = (
                     f"Low volatility ({vol:.4f}), price {close:.2f} < SMA50 "
                     f"{sma50:.2f}, SMA20 {sma20:.2f} > SMA50 → small long entry"
                 )
-                return {"type": "BUY", "ticker": ticker, "quantity": affordable}
+                return {"action": "BUY", "ticker": ticker, "quantity": affordable, "reasoning": reasoning}
 
-        self.last_reason = "HOLD – conditions not met for conservative entry"
-        return {"type": "HOLD", "ticker": ticker, "quantity": 0}
+        reasoning = "HOLD – conditions not met for conservative entry"
+        return {"action": "HOLD", "ticker": ticker, "quantity": 0, "reasoning": reasoning}

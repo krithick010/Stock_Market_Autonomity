@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Adversarial Agent – simulates pump-and-dump manipulation.
 
@@ -44,11 +46,21 @@ class AdversarialAgent(TradingAgent):
         self._volume_history: list[float] = []
         self._phase = "idle"  # "idle" | "pumping" | "ready_to_dump"
 
-    def observe_market_state(self, state: dict):
-        super().observe_market_state(state)
-        bar = state.get("current_bar", {})
+    def perceive(self, market_state: dict) -> dict:
+        super().perceive(market_state)
+        bar = market_state.get("current_bar", {})
         vol = bar.get("Volume", 0)
         self._volume_history.append(vol)
+
+        ticker = bar.get("ticker", "")
+        close = bar.get("Close", 0.0)
+        return {
+            "ticker": ticker,
+            "close": close,
+            "volume": vol,
+            "held_qty": self.positions.get(ticker, 0),
+            "avg_cost": self.avg_cost.get(ticker, 0),
+        }
 
     def _is_low_volume(self) -> bool:
         """Check if current volume is in the lower quartile of history."""
@@ -60,42 +72,38 @@ class AdversarialAgent(TradingAgent):
         threshold = sorted_vols[idx]
         return current <= threshold
 
-    def decide(self) -> dict:
-        state = self._state
-        if state is None:
-            return {"type": "HOLD", "ticker": "", "quantity": 0}
+    def reason(self, observation: dict) -> dict:
+        if not observation or not observation.get("ticker"):
+            return {"action": "HOLD", "ticker": "", "quantity": 0, "reasoning": "No valid observation"}
 
-        bar = state["current_bar"]
-        ticker = bar.get("ticker", "")
-        close = bar["Close"]
-        held_qty = self.positions.get(ticker, 0)
-        avg = self.avg_cost.get(ticker, 0)
+        ticker = observation["ticker"]
+        close = observation["close"]
+        held_qty = observation["held_qty"]
+        avg = observation["avg_cost"]
 
-        # ---------- Dump phase ----------
         if held_qty > 0 and avg > 0:
             gain_pct = (close - avg) / avg
             if gain_pct >= self.DUMP_THRESHOLD:
                 self._phase = "dump"
-                self.last_reason = (
+                reasoning = (
                     f"DUMP phase: gain {gain_pct*100:.1f}% >= "
                     f"{self.DUMP_THRESHOLD*100:.0f}% threshold, "
                     f"dumping {held_qty} shares at {close:.2f}"
                 )
-                return {"type": "SELL", "ticker": ticker, "quantity": held_qty}
+                return {"action": "SELL", "ticker": ticker, "quantity": held_qty, "reasoning": reasoning}
 
-        # ---------- Pump phase ----------
         if self._is_low_volume() and random.random() < self.PUMP_PROBABILITY:
             affordable = int(
                 (self.cash * self.PUMP_FRACTION) / close
             ) if close > 0 else 0
             if affordable > 0:
                 self._phase = "pump"
-                self.last_reason = (
+                reasoning = (
                     f"PUMP phase: low-volume zone detected, "
                     f"burst-buying {affordable} shares at {close:.2f}"
                 )
-                return {"type": "BUY", "ticker": ticker, "quantity": affordable}
+                return {"action": "BUY", "ticker": ticker, "quantity": affordable, "reasoning": reasoning}
 
         self._phase = "idle"
-        self.last_reason = "Adversarial agent idle – conditions not met"
-        return {"type": "HOLD", "ticker": ticker, "quantity": 0}
+        reasoning = "Adversarial agent idle – conditions not met"
+        return {"action": "HOLD", "ticker": ticker, "quantity": 0, "reasoning": reasoning}

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 OrchestratorAgent – Head Agent (Orchestrator) for DevHack 2026 Phase-1.
 
@@ -340,7 +342,6 @@ class OrchestratorAgent:
 
             # ── Step 2: Ask agent for an action ───────────────────────
             # Each agent is an autonomous, goal-driven, rule-based decision maker.
-            agent.observe_market_state(state)
 
             # If this is the whale agent on the crash-trigger step,
             # override its decision with the forced dump.
@@ -349,9 +350,18 @@ class OrchestratorAgent:
                 and self._crash_triggered_step == self.current_step
                 and self._is_whale(agent)
             ):
-                action = self._build_whale_dump(agent)
+                observation = agent.perceive(state)
+                decision = self._build_whale_dump(agent)
+                action = agent.act(decision)
+                agent.memory.append({
+                    "step": state.get("current_step", self.current_step),
+                    "observation": observation,
+                    "decision": decision,
+                    "action": action,
+                    "result": None,
+                })
             else:
-                action = agent.decide()
+                action = agent.step(state)
 
             action.setdefault("ticker", self.ticker)
 
@@ -553,14 +563,11 @@ class OrchestratorAgent:
         return isinstance(agent, AdversarialAgent)
 
     def _build_whale_dump(self, whale: TradingAgent) -> dict:
-        """Build a forced full-dump SELL for the whale agent."""
+        """Build a forced full-dump SELL decision for the whale agent."""
         qty = whale.positions.get(self.ticker, 0)
         reasoning = (
             "Forced whale dump: 100% position liquidation for crash demo."
         )
-        whale.last_action = "SELL"
-        whale.last_reasoning = reasoning
-        whale.last_reason = reasoning
         return {
             "action": "SELL",
             "ticker": self.ticker,

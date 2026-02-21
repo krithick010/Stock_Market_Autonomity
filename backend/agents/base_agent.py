@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 """
 Base trading agent class.
-Every concrete agent inherits from TradingAgent and implements ``decide()``.
+Every concrete agent inherits from TradingAgent and implements
+the agentic pipeline: ``perceive() -> reason() -> act()``.
 
 All agents in this system are **autonomous, goal-driven, rule-based decision
 makers** – they observe market state, apply their strategy independently,
@@ -16,8 +19,8 @@ class TradingAgent:
     Abstract base class for all autonomous trading agents.
 
     Each subclass defines a distinct **goal** (e.g., "maximise trend profits",
-    "exploit mean-reversion") and implements the ``decide()`` method that
-    returns a structured decision dict.
+    "exploit mean-reversion") and implements the ``perceive()`` and
+    ``reason()`` methods.
 
     Attributes:
         name                   – human-readable agent name
@@ -48,44 +51,79 @@ class TradingAgent:
         self.halted: bool = False
         self.active: bool = True
         self._peak_value: float = initial_cash
+        
+        # Agentic Architecture additions
+        self.memory: list[dict] = []
+        self.performance_stats: dict = {
+            "pnl": 0.0,
+            "wins": 0,
+            "losses": 0,
+            "max_drawdown": 0.0
+        }
 
     # ------------------------------------------------------------------ #
-    # Interface methods (override in subclasses)
+    # Agentic Architecture Methods
     # ------------------------------------------------------------------ #
 
-    def observe_market_state(self, state: dict):
-        """Store the current market state for use in `decide()`."""
-        self._state = state
-
-    def decide(self) -> dict:
+    def perceive(self, market_state: dict) -> dict:
         """
-        Decide on a trading action.
-
-        Subclasses **must** override this method and return a structured
-        decision dict of the form::
-
-            {
-                "action":    "BUY" | "SELL" | "HOLD",
-                "quantity":  int   (>= 0),
-                "reasoning": str   (human-readable explanation),
-            }
-
-        The dict may also carry extra keys needed by the simulation
-        (e.g. ``ticker``), but the three above are mandatory.
-
-        After computing the decision, implementations should set:
-            * ``self.last_action``    – the action string
-            * ``self.last_reasoning`` – the reasoning string
+        Extract relevant features from the raw market state.
+        Subclasses should override this to extract specific indicators.
         """
-        # Default: do nothing and explain why
-        self.last_action = "HOLD"
-        self.last_reasoning = "Base agent does not implement a strategy."
-        self.last_reason = self.last_reasoning
+        self._state = market_state
+        return market_state
+
+    def reason(self, observation: dict) -> dict:
+        """
+        Use rules/logic to form an internal decision or plan based on the observation.
+        Subclasses MUST override this.
+        Returns a dict with at least 'action', 'quantity', and 'reasoning'.
+        """
         return {
             "action": "HOLD",
             "quantity": 0,
-            "reasoning": self.last_reasoning,
+            "reasoning": "Base agent does not implement a strategy."
         }
+
+    def act(self, decision: dict) -> dict:
+        """
+        Convert the internal decision into a concrete action dict.
+        """
+        self.last_action = decision.get("action", "HOLD")
+        self.last_reasoning = decision.get("reasoning", "No reason provided.")
+        self.last_reason = self.last_reasoning
+        
+        action_dict = {
+            "type": self.last_action,
+            "action": self.last_action,
+            "quantity": decision.get("quantity", 0),
+            "reasoning": self.last_reasoning,
+            "ticker": decision.get("ticker", "")
+        }
+        return action_dict
+
+    def step(self, market_state: dict) -> dict:
+        """
+        Orchestrates the perceive -> reason -> act pipeline and updates memory.
+        """
+        observation = self.perceive(market_state)
+        decision = self.reason(observation)
+        action = self.act(decision)
+        
+        # Store in memory
+        self.memory.append({
+            "step": market_state.get("current_step", 0),
+            "observation": observation,
+            "decision": decision,
+            "action": action,
+            "result": None,
+        })
+        
+        return action
+
+    def explain_last_action(self) -> str:
+        """Return a human-readable reason for the last action."""
+        return self.last_reasoning
 
     # ------------------------------------------------------------------ #
     # Reasoning helper
@@ -108,8 +146,33 @@ class TradingAgent:
         return ", ".join(parts)
 
     def update_after_step(self, reward: float, new_state: dict):
-        """Hook called after each simulation step (for adaptation logic)."""
-        pass
+        """Update memory result and performance stats after each simulation step."""
+        pnl = float(self.cash - self.initial_cash)
+        self.performance_stats["pnl"] = pnl
+
+        if reward > 0:
+            self.performance_stats["wins"] += 1
+        elif reward < 0:
+            self.performance_stats["losses"] += 1
+
+        bar = new_state.get("current_bar", {}) if isinstance(new_state, dict) else {}
+        close = bar.get("Close", 0.0)
+        ticker = bar.get("ticker", "")
+        portfolio_value = self.get_portfolio_value(close, ticker) if close else self.cash
+        peak = max(self.initial_cash, self._peak_value)
+        drawdown = ((portfolio_value - peak) / peak) if peak > 0 else 0.0
+        if drawdown < self.performance_stats["max_drawdown"]:
+            self.performance_stats["max_drawdown"] = drawdown
+
+        if self.memory:
+            self.memory[-1]["result"] = {
+                "reward": reward,
+                "portfolio_value": portfolio_value,
+                "cash": self.cash,
+                "positions": dict(self.positions),
+                "pnl": self.performance_stats["pnl"],
+                "max_drawdown": self.performance_stats["max_drawdown"],
+            }
 
     # ------------------------------------------------------------------ #
     # Portfolio helpers
@@ -228,6 +291,13 @@ class TradingAgent:
         """Serialise agent state for the frontend."""
         pv = self.get_portfolio_value(current_price, ticker)
         risk = self.get_risk_metrics(current_price, ticker)
+        latest_memory = self.memory[-1] if self.memory else None
+        perf = {
+            "pnl": round(float(self.performance_stats.get("pnl", 0.0)), 2),
+            "wins": int(self.performance_stats.get("wins", 0)),
+            "losses": int(self.performance_stats.get("losses", 0)),
+            "max_drawdown": round(float(self.performance_stats.get("max_drawdown", 0.0)), 6),
+        }
 
         # Determine agent status label (used by OrchestratorAgent snapshot)
         if not self.active:
@@ -252,4 +322,7 @@ class TradingAgent:
             "return_pct": risk["return_pct"],
             "max_drawdown_pct": risk["max_drawdown_pct"],
             "sharpe_ratio": risk["sharpe_ratio"],
+            "memory_size": len(self.memory),
+            "latest_memory": latest_memory,
+            "performance_stats": perf,
         }

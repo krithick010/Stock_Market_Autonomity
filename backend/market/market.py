@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Market engine module — Endogenous Price Impact Model.
 

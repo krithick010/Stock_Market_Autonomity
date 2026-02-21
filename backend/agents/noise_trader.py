@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Noise Trader – random actions to inject realistic market noise.
 
@@ -36,36 +38,43 @@ class NoiseTrader(TradingAgent):
         self.TRADE_PROBABILITY = params.get("trade_probability", 0.15)
         self.POSITION_FRACTION = params.get("position_size_pct", 0.02)
 
-    def decide(self) -> dict:
-        state = self._state
-        if state is None:
-            return {"type": "HOLD", "ticker": "", "quantity": 0}
-
-        bar = state["current_bar"]
+    def perceive(self, market_state: dict) -> dict:
+        super().perceive(market_state)
+        bar = market_state.get("current_bar", {})
         ticker = bar.get("ticker", "")
-        close = bar["Close"]
-        held_qty = self.positions.get(ticker, 0)
+        close = bar.get("Close", 0.0)
+        return {
+            "ticker": ticker,
+            "close": close,
+            "held_qty": self.positions.get(ticker, 0),
+            "trade_roll": random.random(),
+            "direction_roll": random.random(),
+        }
 
-        if random.random() > self.TRADE_PROBABILITY:
-            self.last_reason = "No action this step (random skip)"
-            return {"type": "HOLD", "ticker": ticker, "quantity": 0}
+    def reason(self, observation: dict) -> dict:
+        if not observation or not observation.get("ticker"):
+            return {"action": "HOLD", "ticker": "", "quantity": 0, "reasoning": "No valid observation"}
 
-        # Random direction
-        if random.random() < 0.5:
-            # BUY
+        ticker = observation["ticker"]
+        close = observation["close"]
+        held_qty = observation["held_qty"]
+
+        if observation["trade_roll"] > self.TRADE_PROBABILITY:
+            return {"action": "HOLD", "ticker": ticker, "quantity": 0, "reasoning": "No action this step (random skip)"}
+
+        if observation["direction_roll"] < 0.5:
             affordable = int(
                 (self.cash * self.POSITION_FRACTION) / close
             ) if close > 0 else 0
             if affordable > 0:
                 qty = random.randint(1, max(1, affordable))
-                self.last_reason = f"Random noise BUY of {qty} shares"
-                return {"type": "BUY", "ticker": ticker, "quantity": qty}
+                reasoning = f"Random noise BUY of {qty} shares"
+                return {"action": "BUY", "ticker": ticker, "quantity": qty, "reasoning": reasoning}
         else:
-            # SELL
             if held_qty > 0:
                 sell_qty = random.randint(1, max(1, held_qty))
-                self.last_reason = f"Random noise SELL of {sell_qty} shares"
-                return {"type": "SELL", "ticker": ticker, "quantity": sell_qty}
+                reasoning = f"Random noise SELL of {sell_qty} shares"
+                return {"action": "SELL", "ticker": ticker, "quantity": sell_qty, "reasoning": reasoning}
 
-        self.last_reason = "Random action considered but no position to sell / insufficient cash"
-        return {"type": "HOLD", "ticker": ticker, "quantity": 0}
+        reasoning = "Random action considered but no position to sell / insufficient cash"
+        return {"action": "HOLD", "ticker": ticker, "quantity": 0, "reasoning": reasoning}

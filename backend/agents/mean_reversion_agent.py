@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Mean-Reversion Agent – buys at lower Bollinger Band, sells at upper.
 
@@ -33,15 +35,13 @@ class MeanReversionAgent(TradingAgent):
         self.POSITION_FRACTION = params.get("position_size_pct", 0.12)
         self.BAND_MULTIPLIER = params.get("band_multiplier", 2.0)
 
-    def decide(self) -> dict:
-        state = self._state
-        if state is None:
-            return {"type": "HOLD", "ticker": "", "quantity": 0}
-
-        bar = state["current_bar"]
+    def perceive(self, market_state: dict) -> dict:
+        super().perceive(market_state)
+        bar = market_state.get("current_bar", {})
         ticker = bar.get("ticker", "")
-        close = bar["Close"]
+        close = bar.get("Close", 0.0)
         bb_mid = bar.get("BB_MID", close)
+        
         # Recompute custom bands using configurable multiplier
         # BB_UP/BB_LOW in data use 2σ; scale to our multiplier
         default_up = bar.get("BB_UP", close)
@@ -51,7 +51,25 @@ class MeanReversionAgent(TradingAgent):
         bb_up = bb_mid + half_width * scale
         bb_low = bb_mid - half_width * scale
 
-        held_qty = self.positions.get(ticker, 0)
+        return {
+            "ticker": ticker,
+            "close": close,
+            "bb_mid": bb_mid,
+            "bb_up": bb_up,
+            "bb_low": bb_low,
+            "held_qty": self.positions.get(ticker, 0)
+        }
+
+    def reason(self, observation: dict) -> dict:
+        if not observation or not observation.get("ticker"):
+            return {"action": "HOLD", "ticker": "", "quantity": 0, "reasoning": "No valid observation"}
+
+        ticker = observation["ticker"]
+        close = observation["close"]
+        bb_mid = observation["bb_mid"]
+        bb_up = observation["bb_up"]
+        bb_low = observation["bb_low"]
+        held_qty = observation["held_qty"]
 
         # ---------- Oversold → BUY ----------
         if close < bb_low:
@@ -59,24 +77,24 @@ class MeanReversionAgent(TradingAgent):
                 (self.cash * self.POSITION_FRACTION) / close
             ) if close > 0 else 0
             if affordable > 0:
-                self.last_reason = (
+                reasoning = (
                     f"Price {close:.2f} < BB_LOW {bb_low:.2f} → "
                     f"oversold, mean-reversion BUY "
                     f"(BB_MID={bb_mid:.2f}, BB_UP={bb_up:.2f})"
                 )
-                return {"type": "BUY", "ticker": ticker, "quantity": affordable}
+                return {"action": "BUY", "ticker": ticker, "quantity": affordable, "reasoning": reasoning}
 
         # ---------- Overbought → SELL ----------
         if close > bb_up and held_qty > 0:
-            self.last_reason = (
+            reasoning = (
                 f"Price {close:.2f} > BB_UP {bb_up:.2f} → "
                 f"overbought, closing {held_qty} shares "
                 f"(BB_MID={bb_mid:.2f}, BB_LOW={bb_low:.2f})"
             )
-            return {"type": "SELL", "ticker": ticker, "quantity": held_qty}
+            return {"action": "SELL", "ticker": ticker, "quantity": held_qty, "reasoning": reasoning}
 
-        self.last_reason = (
+        reasoning = (
             f"HOLD – price {close:.2f} within bands "
             f"[{bb_low:.2f}, {bb_up:.2f}]"
         )
-        return {"type": "HOLD", "ticker": ticker, "quantity": 0}
+        return {"action": "HOLD", "ticker": ticker, "quantity": 0, "reasoning": reasoning}

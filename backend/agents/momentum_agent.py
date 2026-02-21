@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Momentum Agent – trend-following strategy based on SMA crossovers.
 
@@ -31,18 +33,28 @@ class MomentumAgent(TradingAgent):
         params = params or {}
         self.POSITION_FRACTION = params.get("position_size_pct", 0.15)
 
-    def decide(self) -> dict:
-        state = self._state
-        if state is None:
-            return {"type": "HOLD", "ticker": "", "quantity": 0}
-
-        bar = state["current_bar"]
+    def perceive(self, market_state: dict) -> dict:
+        super().perceive(market_state)
+        bar = market_state.get("current_bar", {})
         ticker = bar.get("ticker", "")
-        close = bar["Close"]
-        sma20 = bar.get("SMA20", close)
-        sma50 = bar.get("SMA50", close)
+        close = bar.get("Close", 0.0)
+        return {
+            "ticker": ticker,
+            "close": close,
+            "sma20": bar.get("SMA20", close),
+            "sma50": bar.get("SMA50", close),
+            "held_qty": self.positions.get(ticker, 0)
+        }
 
-        held_qty = self.positions.get(ticker, 0)
+    def reason(self, observation: dict) -> dict:
+        if not observation or not observation.get("ticker"):
+            return {"action": "HOLD", "ticker": "", "quantity": 0, "reasoning": "No valid observation"}
+
+        ticker = observation["ticker"]
+        close = observation["close"]
+        sma20 = observation["sma20"]
+        sma50 = observation["sma50"]
+        held_qty = observation["held_qty"]
 
         # ---------- Uptrend detected (golden cross zone) ----------
         if sma20 > sma50:
@@ -51,28 +63,28 @@ class MomentumAgent(TradingAgent):
                     (self.cash * self.POSITION_FRACTION) / close
                 ) if close > 0 else 0
                 if affordable > 0:
-                    self.last_reason = (
+                    reasoning = (
                         f"SMA20 ({sma20:.2f}) > SMA50 ({sma50:.2f}) → "
                         f"uptrend detected, entering long at {close:.2f}"
                     )
-                    return {"type": "BUY", "ticker": ticker, "quantity": affordable}
+                    return {"action": "BUY", "ticker": ticker, "quantity": affordable, "reasoning": reasoning}
             # Already holding – ride the trend
-            self.last_reason = (
+            reasoning = (
                 f"HOLD – SMA20 ({sma20:.2f}) > SMA50 ({sma50:.2f}), "
                 "riding uptrend"
             )
-            return {"type": "HOLD", "ticker": ticker, "quantity": 0}
+            return {"action": "HOLD", "ticker": ticker, "quantity": 0, "reasoning": reasoning}
 
         # ---------- Downtrend / death cross zone ----------
         if sma20 < sma50 and held_qty > 0:
-            self.last_reason = (
+            reasoning = (
                 f"SMA20 ({sma20:.2f}) < SMA50 ({sma50:.2f}) → "
                 f"trend reversal, closing position of {held_qty}"
             )
-            return {"type": "SELL", "ticker": ticker, "quantity": held_qty}
+            return {"action": "SELL", "ticker": ticker, "quantity": held_qty, "reasoning": reasoning}
 
-        self.last_reason = (
+        reasoning = (
             f"HOLD – SMA20 ({sma20:.2f}), SMA50 ({sma50:.2f}), "
             f"no clear signal"
         )
-        return {"type": "HOLD", "ticker": ticker, "quantity": 0}
+        return {"action": "HOLD", "ticker": ticker, "quantity": 0, "reasoning": reasoning}

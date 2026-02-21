@@ -26,24 +26,24 @@ export default function ControlsPanel({
 
   return (
     <div className="card controls">
-      <h2>Controls</h2>
+      <h2>Simulation Controls</h2>
 
       <label>
-        Ticker
+        Stock / Index
         <select value={ticker} onChange={e => setTicker(e.target.value)}>
           {TICKERS.map(t => <option key={t} value={t}>{t}</option>)}
         </select>
       </label>
 
       <label>
-        Period
+        Historical Window
         <select value={period} onChange={e => setPeriod(e.target.value)}>
           {PERIODS.map(p => <option key={p} value={p}>{p}</option>)}
         </select>
       </label>
 
       <label>
-        Interval
+        Time per Candle
         <select value={interval} onChange={e => setInterval_(e.target.value)}>
           {INTERVALS.map(i => <option key={i} value={i}>{i}</option>)}
         </select>
@@ -52,7 +52,7 @@ export default function ControlsPanel({
       {/* Speed control */}
       <div className="speed-section">
         <label>
-          Speed: {speedMs}ms/step
+          Run speed: {speedMs}ms per step
           <input
             type="range" min={50} max={1000} step={50}
             value={speedMs}
@@ -60,7 +60,7 @@ export default function ControlsPanel({
           />
         </label>
         <label>
-          Batch: {batchSize} step{batchSize > 1 ? 's' : ''}/tick
+          Steps per click/run: {batchSize}
           <input
             type="range" min={1} max={20} step={1}
             value={batchSize}
@@ -71,7 +71,7 @@ export default function ControlsPanel({
 
       {/* Agent toggles */}
       <div className="agent-toggles">
-        <h3>Active Agents</h3>
+        <h3>Enable Agents</h3>
         {allAgents.map(a => (
           <label key={a.key} className="toggle-label">
             <input
@@ -86,15 +86,15 @@ export default function ControlsPanel({
 
       <div className="btn-row">
         <button className="btn btn-primary" onClick={onInit}>
-          Start / Re-init
+          1) Initialize Market
         </button>
         <button className="btn btn-success" onClick={onStep}
                 disabled={status === 'finished' || status === 'idle'}>
-          Step
+          2) Run One Step
         </button>
         <button className="btn btn-warning" onClick={onAutoRun}
                 disabled={status === 'running' || status === 'finished' || status === 'idle'}>
-          Auto-Run
+          3) Auto Run
         </button>
         <button className="btn btn-danger" onClick={onPause}
                 disabled={status !== 'running'}>
@@ -122,10 +122,10 @@ export default function ControlsPanel({
       </button>
 
       <div className="status-text">
-        Status: <span className={`badge ${badgeClass}`}>{status.toUpperCase()}</span>
+        Simulation status: <span className={`badge ${badgeClass}`}>{status.toUpperCase()}</span>
         {crashActive && <span className="badge badge-crash">CRASH</span>}
         <br />
-        Step: {step} / {maxSteps}
+        Current step: {step} / {maxSteps}
       </div>
     </div>
   );
