@@ -1,8 +1,9 @@
-const { execSync } = require('child_process');
-const path = require('path');
-const fs = require('fs');
+import { execSync } from 'child_process';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
 
-const frontendDir = __dirname;
+const __filename = fileURLToPath(import.meta.url);
+const frontendDir = dirname(__filename);
 
 console.log('Installing dependencies...');
 try {
@@ -13,4 +14,9 @@ try {
 }
 
 console.log('Starting Vite dev server...');
-execSync('npm run dev', { cwd: frontendDir, stdio: 'inherit' });
+try {
+  execSync('npm run dev', { cwd: frontendDir, stdio: 'inherit' });
+} catch (e) {
+  console.error('Server error:', e.message);
+  process.exit(1);
+}
