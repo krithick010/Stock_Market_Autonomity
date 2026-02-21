@@ -1,4 +1,4 @@
-const { execSync } = require('child_process');
+const { spawn } = require('child_process');
 const path = require('path');
 
 // Calculate paths
@@ -12,27 +12,30 @@ console.log('[v0] Frontend directory:', frontendDir);
 
 // Step 1: Install dependencies
 console.log('[v0] Installing npm dependencies...');
-try {
-  execSync('npm install', { 
-    cwd: frontendDir, 
-    stdio: 'inherit',
-    shell: '/bin/bash'
-  });
-  console.log('[v0] Dependencies installed successfully');
-} catch (error) {
-  console.error('[v0] Failed to install dependencies:', error.message);
-  process.exit(1);
-}
+const npmInstall = spawn('npm', ['install'], { 
+  cwd: frontendDir,
+  stdio: 'inherit'
+});
 
-// Step 2: Start dev server
-console.log('[v0] Starting Vite dev server on port 5173...');
-try {
-  execSync('npm run dev', { 
-    cwd: frontendDir, 
-    stdio: 'inherit',
-    shell: '/bin/bash'
+npmInstall.on('close', (code) => {
+  if (code !== 0) {
+    console.error('[v0] npm install failed with code', code);
+    process.exit(1);
+  }
+  
+  console.log('[v0] Dependencies installed successfully');
+  console.log('[v0] Starting Vite dev server on port 5173...');
+  
+  // Step 2: Start dev server
+  const npmDev = spawn('npm', ['run', 'dev'], {
+    cwd: frontendDir,
+    stdio: 'inherit'
   });
-} catch (error) {
-  console.error('[v0] Failed to start dev server:', error.message);
-  process.exit(1);
-}
+  
+  npmDev.on('close', (code) => {
+    if (code !== 0) {
+      console.error('[v0] Dev server failed with code', code);
+      process.exit(1);
+    }
+  });
+});
