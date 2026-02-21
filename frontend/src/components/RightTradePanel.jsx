@@ -11,14 +11,13 @@ export default function RightTradePanel({
   onOpenSettings,
 }) {
   const INTERVALS = ['1m', '5m', '15m', '1h', '1d'];
-  const canAct = status === 'paused';
 
   return (
     <div className="olymp-right-panel">
       <div className="panel-section">
         <h3>Trade Settings</h3>
         <label>
-          <span className="label-text">Time per Candle</span>
+          <span className="label-text">Candle Interval</span>
           <select 
             value={interval} 
             onChange={e => setInterval_(e.target.value)}
@@ -30,9 +29,9 @@ export default function RightTradePanel({
       </div>
 
       <div className="panel-section">
-        <h3>Simulation Speed</h3>
+        <h3>Speed Control</h3>
         <label className="slider-label">
-          <span className="speed-value">{speedMs}ms</span>
+          <span className="speed-value">Delay: {speedMs}ms</span>
           <input
             type="range"
             min={50}
@@ -44,7 +43,7 @@ export default function RightTradePanel({
           />
         </label>
         <label className="slider-label">
-          <span className="speed-value">Steps: {batchSize}</span>
+          <span className="speed-value">Batch: {batchSize} step{batchSize > 1 ? 's' : ''}</span>
           <input
             type="range"
             min={1}
@@ -74,31 +73,31 @@ export default function RightTradePanel({
       </div>
 
       <div className="panel-section">
-        <h3>Controls</h3>
+        <h3>Actions</h3>
         <div className="control-buttons">
           <button className="btn-init" onClick={onInit}>
-            Initialize
+            ▶ Initialize
           </button>
           <button 
             className="btn-step" 
             onClick={onStep}
             disabled={status === 'finished' || status === 'idle'}
           >
-            Step
+            ⏭ Step
           </button>
           <button 
             className="btn-run" 
             onClick={onAutoRun}
             disabled={status === 'running' || status === 'finished' || status === 'idle'}
           >
-            Run
+            ⏩ Run
           </button>
           <button 
             className="btn-pause" 
             onClick={onPause}
             disabled={status !== 'running'}
           >
-            Pause
+            ⏸ Pause
           </button>
         </div>
 
@@ -107,25 +106,25 @@ export default function RightTradePanel({
           onClick={onCrash}
           disabled={status === 'idle' || status === 'finished'}
         >
-          💥 Crash
+          ⚡ Trigger Crash
         </button>
 
         <button 
           className="btn-settings-panel"
           onClick={onOpenSettings}
         >
-          ⚙ Settings
+          ◈ Agent Settings
         </button>
 
         <div className="status-info">
           <div className="status-row">
-            <span className="status-label">Status:</span>
+            <span className="status-label">Status</span>
             <span className={`status-badge status-${status}`}>
               {status.toUpperCase()}
             </span>
           </div>
           <div className="status-row">
-            <span className="status-label">Step:</span>
+            <span className="status-label">Progress</span>
             <span className="step-counter">{step} / {maxSteps}</span>
           </div>
         </div>

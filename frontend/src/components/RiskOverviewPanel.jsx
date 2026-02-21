@@ -1,9 +1,9 @@
 import React from 'react';
 
 function riskLevel(exposurePct, globalDD) {
-  if (globalDD <= -10 || exposurePct > 80) return { label: 'HIGH', color: '#ef4444' };
-  if (globalDD <= -5 || exposurePct > 50) return { label: 'MEDIUM', color: '#eab308' };
-  return { label: 'LOW', color: '#22c55e' };
+  if (globalDD <= -10 || exposurePct > 80) return { label: 'HIGH', color: '#ff3b5c' };
+  if (globalDD <= -5 || exposurePct > 50) return { label: 'MEDIUM', color: '#ffb800' };
+  return { label: 'LOW', color: '#00ff88' };
 }
 
 export default function RiskOverviewPanel({ systemRisk }) {
@@ -31,7 +31,7 @@ export default function RiskOverviewPanel({ systemRisk }) {
 
       <div className="risk-metrics-grid">
         <div className="risk-metric-card">
-          <div className="risk-metric-value">${(r.total_aum || 0).toLocaleString()}</div>
+          <div className="risk-metric-value">₹{(r.total_aum || 0).toLocaleString()}</div>
           <div className="risk-metric-label">Total AUM</div>
         </div>
         <div className="risk-metric-card">
@@ -39,7 +39,7 @@ export default function RiskOverviewPanel({ systemRisk }) {
           <div className="risk-metric-label">Exposure</div>
         </div>
         <div className="risk-metric-card">
-          <div className="risk-metric-value" style={{ color: (r.global_drawdown_pct || 0) < -5 ? '#ef4444' : '#22c55e' }}>
+          <div className="risk-metric-value" style={{ color: (r.global_drawdown_pct || 0) < -5 ? '#ff3b5c' : '#00ff88' }}>
             {r.global_drawdown_pct ?? 0}%
           </div>
           <div className="risk-metric-label">Global Drawdown</div>
@@ -49,13 +49,13 @@ export default function RiskOverviewPanel({ systemRisk }) {
           <div className="risk-metric-label">Open Positions</div>
         </div>
         <div className="risk-metric-card">
-          <div className="risk-metric-value" style={{ color: (r.violation_count || 0) > 0 ? '#eab308' : '#22c55e' }}>
+          <div className="risk-metric-value" style={{ color: (r.violation_count || 0) > 0 ? '#ffb800' : '#00ff88' }}>
             {r.violation_count ?? 0}
           </div>
           <div className="risk-metric-label">Violations</div>
         </div>
         <div className="risk-metric-card">
-          <div className="risk-metric-value" style={{ color: (r.circuit_breakers_active || 0) > 0 ? '#ef4444' : '#22c55e' }}>
+          <div className="risk-metric-value" style={{ color: (r.circuit_breakers_active || 0) > 0 ? '#ff3b5c' : '#00ff88' }}>
             {r.circuit_breakers_active ?? 0}
           </div>
           <div className="risk-metric-label">Circuit Breakers</div>

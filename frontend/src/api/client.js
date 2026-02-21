@@ -33,7 +33,7 @@ export async function autoStepSimulation(steps = 10) {
 
 /** Jump (scrub) to a specific step */
 export async function jumpToStep(step) {
-  const res = await api.post('/api/jump', { step });
+  const res = await api.post('/api/jump', { step }, { timeout: 120000 });
   return res.data;
 }
 

@@ -143,6 +143,17 @@ class MarketEnvironment:
         self.price_history_simulated: list[float] = [initial_close]
 
     # ------------------------------------------------------------------ #
+    # Reset (rewind without re-downloading)
+    # ------------------------------------------------------------------ #
+
+    def reset(self) -> None:
+        """Reset the market to step 0 without re-downloading data."""
+        self.current_step = 0
+        initial_close = float(self.df.iloc[0]["Close"])
+        self.current_price = initial_close
+        self.price_history_simulated = [initial_close]
+
+    # ------------------------------------------------------------------ #
     # Private helpers
     # ------------------------------------------------------------------ #
 

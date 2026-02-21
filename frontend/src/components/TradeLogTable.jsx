@@ -55,7 +55,7 @@ export default function TradeLogTable({ tradeLog }) {
                 <td>{t.action}</td>
                 <td>{t.price}</td>
                 <td>{t.quantity}</td>
-                <td>${t.portfolio_value?.toLocaleString()}</td>
+                <td>₹{t.portfolio_value?.toLocaleString()}</td>
                 <td title={t.agent_reason}>{t.agent_reason?.slice(0, 60)}</td>
                 <td className={decClass(t.regulator_decision)}>{t.regulator_decision}</td>
                 <td title={t.regulator_reason}>{t.regulator_reason?.slice(0, 50)}</td>

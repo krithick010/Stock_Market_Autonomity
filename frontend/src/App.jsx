@@ -10,6 +10,9 @@ import RegulationLogTable from './components/RegulationLogTable';
 import PerformanceCharts from './components/PerformanceCharts';
 import RiskOverviewPanel from './components/RiskOverviewPanel';
 import SettingsModal from './components/SettingsModal';
+import MarketPanel from './components/MarketPanel';
+import StatsPanel from './components/StatsPanel';
+import HelpPanel from './components/HelpPanel';
 
 const ALL_AGENTS = [
   { key: 'conservative', label: 'Conservative' },
@@ -64,6 +67,15 @@ export default function App() {
   // ---- Highlight step for scrubber ----
   const [highlightStep, setHighlightStep] = useState(null);
 
+  // ---- Max step ever reached (caps the scrubber) ----
+  const [maxReachedStep, setMaxReachedStep] = useState(0);
+
+  // ---- Active sidebar tab ----
+  const [activeTab, setActiveTab] = useState('trades');
+
+  // ---- Jump lock (prevent overlapping jump calls) ----
+  const jumpingRef = useRef(false);
+
   // ---- Handlers ----
 
   const handleInit = useCallback(async () => {
@@ -78,6 +90,7 @@ export default function App() {
         setSnapshot(data);
         setStatus('paused');
         setHighlightStep(null);
+        setMaxReachedStep(0);
       }
     } catch (err) {
       setError(err.response?.data?.error || err.message);
@@ -91,6 +104,7 @@ export default function App() {
       const data = await stepSimulation(batchSize);
       if (data.error) { setError(data.error); return; }
       setSnapshot(data);
+      setMaxReachedStep(prev => Math.max(prev, data.step ?? 0));
       if (data.finished) {
         setStatus('finished');
         if (autoRef.current) { clearInterval(autoRef.current); autoRef.current = null; }
@@ -111,6 +125,7 @@ export default function App() {
           return;
         }
         setSnapshot(data);
+        setMaxReachedStep(prev => Math.max(prev, data.step ?? 0));
         if (data.finished) {
           clearInterval(autoRef.current); autoRef.current = null;
           setStatus('finished');
@@ -130,6 +145,11 @@ export default function App() {
 
   const handleJump = useCallback(async (targetStep) => {
     setError(null);
+    // Block jumps beyond the highest step ever reached
+    if (targetStep > maxReachedStep) return;
+    // Block concurrent jumps
+    if (jumpingRef.current) return;
+    jumpingRef.current = true;
     if (autoRef.current) { clearInterval(autoRef.current); autoRef.current = null; setStatus('paused'); }
     try {
       const data = await jumpToStep(targetStep);
@@ -139,8 +159,10 @@ export default function App() {
       if (data.finished) setStatus('finished');
     } catch (err) {
       setError(err.response?.data?.error || err.message);
+    } finally {
+      jumpingRef.current = false;
     }
-  }, []);
+  }, [maxReachedStep]);
 
   const handleCrash = useCallback(async () => {
     setError(null);
@@ -184,32 +206,76 @@ export default function App() {
       {error && <div className="error-banner">⚠ {error}</div>}
 
       <div className="olymp-layout">
-        <LeftSidebar />
+        <LeftSidebar activeTab={activeTab} onTabChange={setActiveTab} />
 
         <main className="olymp-center">
-          <PriceChart
-            priceHistory={snapshot?.price_history}
-            tradesAtStep={snapshot?.trades_at_step}
-            tradeLog={snapshot?.trade_log}
-            highlightStep={highlightStep}
-            onJump={handleJump}
-            maxSteps={maxSteps}
-            currentStep={step}
-          />
+          {/* ── TRADES TAB (default) ── */}
+          {activeTab === 'trades' && (
+            <>
+              <PriceChart
+                priceHistory={snapshot?.price_history}
+                tradesAtStep={snapshot?.trades_at_step}
+                tradeLog={snapshot?.trade_log}
+                highlightStep={highlightStep}
+                onJump={handleJump}
+                maxSteps={maxSteps}
+                currentStep={step}
+                maxReachedStep={maxReachedStep}
+              />
+              <TradeLogTable tradeLog={snapshot?.trade_log} />
+              <RegulationLogTable regulationLog={snapshot?.regulation_log} />
+            </>
+          )}
 
-          <RiskOverviewPanel systemRisk={snapshot?.system_risk} />
+          {/* ── MARKET TAB ── */}
+          {activeTab === 'market' && (
+            <>
+              <PriceChart
+                priceHistory={snapshot?.price_history}
+                tradesAtStep={snapshot?.trades_at_step}
+                tradeLog={snapshot?.trade_log}
+                highlightStep={highlightStep}
+                onJump={handleJump}
+                maxSteps={maxSteps}
+                currentStep={step}
+                maxReachedStep={maxReachedStep}
+              />
+              <MarketPanel
+                priceHistory={snapshot?.price_history}
+                systemRisk={snapshot?.system_risk}
+                crashActive={snapshot?.crash_active}
+              />
+            </>
+          )}
 
-          <AgentsPanel agents={snapshot?.agents} />
+          {/* ── AGENTS TAB ── */}
+          {activeTab === 'agents' && (
+            <>
+              <AgentsPanel agents={snapshot?.agents} tradeLog={snapshot?.trade_log} />
+            </>
+          )}
 
-          <PerformanceCharts
-            agents={snapshot?.agents}
-            tradeLog={snapshot?.trade_log}
-            regulationLog={snapshot?.regulation_log}
-          />
+          {/* ── STATS TAB ── */}
+          {activeTab === 'stats' && (
+            <>
+              <RiskOverviewPanel systemRisk={snapshot?.system_risk} />
+              <StatsPanel
+                agents={snapshot?.agents}
+                tradeLog={snapshot?.trade_log}
+                regulationLog={snapshot?.regulation_log}
+              />
+              <PerformanceCharts
+                agents={snapshot?.agents}
+                tradeLog={snapshot?.trade_log}
+                regulationLog={snapshot?.regulation_log}
+              />
+            </>
+          )}
 
-          <TradeLogTable tradeLog={snapshot?.trade_log} />
-
-          <RegulationLogTable regulationLog={snapshot?.regulation_log} />
+          {/* ── HELP TAB ── */}
+          {activeTab === 'help' && (
+            <HelpPanel />
+          )}
         </main>
 
         <RightTradePanel

@@ -135,6 +135,14 @@ class SimulationDB:
         except Exception:
             traceback.print_exc()
 
+    def _safe_commit(self):
+        """Commit if a transaction is active; silently skip otherwise."""
+        try:
+            if self.conn and self.conn.in_transaction:
+                self.conn.commit()
+        except Exception:
+            traceback.print_exc()
+
     def insert_trade(
         self,
         run_id: str,
@@ -164,7 +172,7 @@ class SimulationDB:
                     datetime.now().isoformat(),
                 ),
             )
-            self.conn.commit()
+            self._safe_commit()
         except Exception:
             traceback.print_exc()
 
@@ -190,7 +198,7 @@ class SimulationDB:
                     datetime.now().isoformat(),
                 ),
             )
-            self.conn.commit()
+            self._safe_commit()
         except Exception:
             traceback.print_exc()
 

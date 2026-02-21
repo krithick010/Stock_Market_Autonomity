@@ -523,10 +523,69 @@ class OrchestratorAgent:
     # Jump to step
     # ------------------------------------------------------------------ #
 
+    def _reinit_without_download(self) -> None:
+        """
+        Reset the simulation to step 0 **without** re-downloading
+        market data from yfinance.  Used by jump_to_step for rewinding.
+        """
+        # Reset market environment in-place (no network call)
+        self.market.reset()
+        self.current_step = 0
+        self.max_steps = self.market.total_bars
+        self.finished = False
+        self.trades_at_step = []
+
+        # Reset crash state
+        self.crash_active = False
+        self._crash_steps_remaining = 0
+        self._crash_vol_multiplier = 1.0
+        self.circuit_breakers_active = 0
+        self.crash_mode_active = False
+        self._crash_triggered_step = None
+        self._pre_crash_price = None
+        self.trading_halted = False
+
+        # Reset in-memory logs
+        self.logger.reset()
+
+        # Re-create agents with fresh state
+        self.agents = []
+        for key in AGENT_REGISTRY:
+            display = AGENT_DISPLAY_NAMES[key]
+            cls = AGENT_REGISTRY[key]
+            params = self._agent_params.get(key, {})
+            agent = cls(display, initial_cash=100_000.0, params=params)
+            agent.active = key in self._active_agent_keys
+            self.agents.append(agent)
+
+        # Re-create regulator
+        self.regulator = RegulatorAgent()
+
+        # Seed price history with initial bar
+        state = self.market.get_state()
+        self.price_history = [state["current_bar"]]
+
+        close = state["current_bar"]["Close"]
+        for agent in self.agents:
+            pv = agent.get_portfolio_value(close, self.ticker)
+            agent.portfolio_value_history.append(pv)
+
+        self._peak_total_value = sum(
+            a.get_portfolio_value(close, self.ticker) for a in self.agents
+        )
+
+        # New run in DB
+        self.run_id = str(uuid.uuid4())
+        if self.db:
+            self.db.create_run(self.run_id, self.ticker, self.period, self.interval)
+        self.logger.set_db(self.db, self.run_id, self.ticker)
+
     def jump_to_step(self, target_step: int) -> dict:
         """
         Fast-forward (or rewind) to a specific step.
-        If the target is behind the current step, re-initialises and replays.
+        If the target is behind the current step, resets in-place
+        (no yfinance re-download) and replays.
+        DB writes are disabled during replay to avoid SQLite errors.
         """
         if self.market is None:
             return {"error": "Simulation not initialised."}
@@ -535,15 +594,20 @@ class OrchestratorAgent:
         target_step = max(0, target_step)
 
         if target_step <= self.current_step:
-            # Need to re-init and replay up to target
-            self.init(
-                self.ticker, self.period, self.interval,
-                active_agents=self._active_agent_keys,
-                agent_params=self._agent_params,
-            )
+            # Reset without re-downloading market data
+            self._reinit_without_download()
 
-        while self.current_step < target_step and not self.finished:
-            self.run_step()
+        # Disable DB writes during replay (they are redundant and cause
+        # SQLite "cannot commit" errors on rapid sequential inserts)
+        saved_db = self.logger._db
+        self.logger._db = None
+
+        try:
+            while self.current_step < target_step and not self.finished:
+                self.run_step()
+        finally:
+            # Always restore DB writes regardless of errors
+            self.logger._db = saved_db
 
         return self.get_snapshot()
 

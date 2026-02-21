@@ -1,21 +1,23 @@
 import React from 'react';
 
-export default function LeftSidebar() {
-  const navItems = [
-    { id: 'trades', icon: '↕', label: 'Trades', active: true },
-    { id: 'market', icon: '📊', label: 'Market' },
-    { id: 'rewards', icon: '🏆', label: 'Rewards' },
-    { id: 'help', icon: '❓', label: 'Help' },
-  ];
+const NAV_ITEMS = [
+  { id: 'trades', icon: '⇅', label: 'Trades' },
+  { id: 'market', icon: '◎', label: 'Market' },
+  { id: 'agents', icon: '⬡', label: 'Agents' },
+  { id: 'stats',  icon: '◈', label: 'Stats' },
+  { id: 'help',   icon: '?', label: 'Help' },
+];
 
+export default function LeftSidebar({ activeTab, onTabChange }) {
   return (
     <aside className="olymp-sidebar">
       <nav className="sidebar-nav">
-        {navItems.map(item => (
+        {NAV_ITEMS.map(item => (
           <button
             key={item.id}
-            className={`sidebar-nav-item ${item.active ? 'active' : ''}`}
+            className={`sidebar-nav-item ${activeTab === item.id ? 'active' : ''}`}
             title={item.label}
+            onClick={() => onTabChange(item.id)}
           >
             <span className="nav-icon">{item.icon}</span>
             <span className="nav-label">{item.label}</span>
@@ -26,7 +28,7 @@ export default function LeftSidebar() {
       <div className="sidebar-footer">
         <div className="online-indicator">
           <span className="dot"></span>
-          <span className="text">Online</span>
+          <span className="text">Live</span>
         </div>
       </div>
     </aside>

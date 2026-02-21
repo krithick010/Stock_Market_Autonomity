@@ -13,7 +13,7 @@ export default function TopBar({
   return (
     <header className="olymp-topbar">
       <div className="topbar-left">
-        <div className="logo">⚡</div>
+        <div className="logo">◈ MASTER</div>
         <div className="stock-selector">
           <select 
             value={ticker} 
@@ -36,14 +36,14 @@ export default function TopBar({
       </div>
 
       <div className="topbar-center">
-        <h1>Multi-Agent Stock Market AI</h1>
+        <h1>Multi Agent Stock Market Environment For Research V1</h1>
       </div>
 
       <div className="topbar-right">
         <div className="account-info">
           <div className="balance-display">
-            <span className="label">Balance</span>
-            <span className="amount">${(balance || 0).toLocaleString()}</span>
+            <span className="label">Portfolio</span>
+            <span className="amount">₹{(balance || 0).toLocaleString()}</span>
           </div>
           {crashActive && <span className="crash-indicator">⚠ CRASH ACTIVE</span>}
         </div>
@@ -54,10 +54,6 @@ export default function TopBar({
           title="Toggle theme"
         >
           {theme === 'light' ? '🌙' : '☀️'}
-        </button>
-
-        <button className="payments-btn">
-          Payments
         </button>
 
         <button className="profile-btn">
